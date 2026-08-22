@@ -130,6 +130,22 @@ jobs:
             exit 1
           fi
 
+      - name: Guard — the arm64 wheel tripwire must actually be wired
+        run: |
+          set -euo pipefail
+          # PIP_ONLY_BINARY is passed as a build-arg below so a dependency with
+          # no arm64 wheel fails fast instead of silently compiling under
+          # emulation. Docker IGNORES a build-arg the Dockerfile does not
+          # declare, and only warns — so without this check the guard is a
+          # silent no-op that reads as protection.
+          if ! grep -qE '^ARG[[:space:]]+PIP_ONLY_BINARY' nautobot/Dockerfile; then
+            echo "::error::nautobot/Dockerfile does not declare 'ARG PIP_ONLY_BINARY'."
+            echo "The build-arg is therefore ignored and the arm64 wheel tripwire is dead."
+            echo "Add 'ARG PIP_ONLY_BINARY' before the pip install layer, or remove the"
+            echo "build-arg from this workflow. Do not leave it looking wired when it is not."
+            exit 1
+          fi
+
       - name: Fetch the source dump
         env:
           SOURCE_DUMP_URL: ${{ secrets.SOURCE_DUMP_URL }}
