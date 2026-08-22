@@ -67,11 +67,21 @@ note "credential-shaped tables discovered: ${#candidates[@]}"
 # ── 2. Tables allowed to be non-empty, with their exact expected counts ────
 #
 # Anything discovered above and NOT named here must be empty.
+#
+# The OAuth client count is DECLARED, not guessed. What ships is the client
+# registered during the build (B4), so the count is not knowable when this
+# script is written — the operator states it at assert time and the assertion
+# holds them to it. Default 0 so a pre-B4 run is meaningful.
+: "${DEMO_EXPECTED_OAUTH_CLIENTS:=0}"
+
 declare -A EXPECTED=(
   [auth_user]=3                              # demo-readonly, demo-netops, demo-admin
   [frisian_mcp_tokens_frisianmcptoken]=3
   [users_objectpermission]=3                 # readonly-view, netops-view, netops-write
   [users_objectpermission_users]=3
+  [frisian_mcp_oauth_oauthclient]="${DEMO_EXPECTED_OAUTH_CLIENTS}"
+  [frisian_mcp_oauth_oauthaccesstoken]=0
+  [frisian_mcp_oauth_oauthauthorizeconsent]=0
 )
 # Row count is not fixed for the object_types M2M — it tracks how many content
 # types the scoped grants cover, which legitimately moves with the plugin set.
@@ -95,6 +105,25 @@ for t in "${candidates[@]}"; do
   fi
 done
 
+# ── 2b. OAuth: ship the durable half, never the perishable half ────────────
+#
+# The OAuth CLIENT is durable — it has no expiry, and it is what lets a viewer
+# complete authorize and mint their own fresh token. It ships.
+#
+# An ACCESS TOKEN is not. `OAuthAccessToken.expires_at` is stamped at mint
+# time against a 3600s package default, and for a published image mint time is
+# BUILD time — so a baked access token ships already dead and reads to a user
+# as "the demo is broken". Assert it is absent rather than shipping a
+# credential with a clock on it.
+#
+# The CONSENT row is asserted absent as a FORWARD GUARD, and the honest reason
+# matters here. It cannot currently fast-path anything: AuthorizeView gates on
+# `auto_approve and has_prior_consent(...)`, and this config sets
+# AUTO_APPROVE=False, so the `and` short-circuits and the consent screen always
+# renders. (Anonymous requests cannot store consent rows either.) The reason to
+# assert it is that AUTO_APPROVE=True is a one-line change someone will reach
+# for to smooth the demo — and on that day the artifact should already be
+# clean. Minimal-artifact hygiene that hardens a future config change.
 # ── 3. The identities are the RIGHT ones, not merely the right count ───────
 #
 # Three rows in auth_user is satisfied by three wrong users. Name them.
