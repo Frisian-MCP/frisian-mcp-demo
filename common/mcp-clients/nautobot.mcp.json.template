@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "frisian-nautobot-read-only": {
+      "type": "http",
+      "url": "http://127.0.0.1:8080/mcp/read-only/",
+      "headers": {
+        "Authorization": "Bearer D6_NAUTOBOT_READ_ONLY_TOKEN"
+      }
+    },
+    "frisian-nautobot-read-write": {
+      "type": "http",
+      "url": "http://127.0.0.1:8080/mcp/read-write/",
+      "headers": {
+        "Authorization": "Bearer D6_NAUTOBOT_READ_WRITE_TOKEN"
+      }
+    },
+    "frisian-nautobot-admin": {
+      "type": "http",
+      "url": "http://127.0.0.1:8080/mcp/admin/",
+      "headers": {
+        "Authorization": "Bearer D6_NAUTOBOT_ADMIN_TOKEN"
+      }
+    }
+  }
+}
