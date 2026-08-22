@@ -1,0 +1,31 @@
+# ── Read this before adding anything ─────────────────────────────────────────
+#
+# `.env` is NOT ignored here, and that is deliberate.
+#
+# Every host directory ships a committed `.env` holding published demo values,
+# because constraint #6 is that `docker compose up` works on a fresh clone with
+# no flags and no setup step. Ignoring `.env` is the reflex, and it would
+# silently break the quickstart for everyone who clones this repo.
+#
+# Nothing in this repository is a secret. The demo images ship their own
+# credentials by design. If you ever find yourself wanting to add a real secret
+# here, that is the signal that it does not belong in this repo at all.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Local overrides — these DO get ignored, so a user can override the committed
+# defaults without git showing them as modified.
+.env.local
+*.env.local
+
+# The golden SQL artifact is injected at build time by CI and is far too large
+# (and too data-bearing) to live in git.
+**/demo.sql
+**/demo.sql.gz
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/

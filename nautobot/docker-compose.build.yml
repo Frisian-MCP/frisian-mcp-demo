@@ -1,0 +1,45 @@
+# Local-build override for the Nautobot demo host.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
+#
+# The default path (`docker compose up`, no flags) pulls prebuilt images from
+# GHCR. This file is the escape hatch for building both images yourself —
+# reviewing the Dockerfiles, testing a config change, or working offline.
+#
+# It overrides ONLY the build inputs. Ports, volumes, healthchecks, env and
+# the dependency graph all still come from docker-compose.yml.
+#
+# The `image:` keys are restated so a local build tags the same names the
+# default path expects, keeping the lockstep pin intact: a local build
+# replaces BOTH images at the same DEMO_TAG, never one of the two.
+#
+# NOTE: the db image needs the golden SQL artifact present at the path its
+# Dockerfile expects (see db/Dockerfile). It is not committed to this repo —
+# CI injects it at build time. Building the db image locally without it will
+# fail loudly rather than produce an empty demo.
+
+services:
+
+  nautobot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: "ghcr.io/frisian-mcp/demo-nautobot:${DEMO_TAG:-v0.1.0}"
+
+  db:
+    build:
+      context: .
+      dockerfile: db/Dockerfile
+    image: "ghcr.io/frisian-mcp/demo-nautobot-db:${DEMO_TAG:-v0.1.0}"
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: "ghcr.io/frisian-mcp/demo-nautobot:${DEMO_TAG:-v0.1.0}"
+
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: "ghcr.io/frisian-mcp/demo-nautobot:${DEMO_TAG:-v0.1.0}"

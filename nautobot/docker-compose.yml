@@ -1,0 +1,193 @@
+# frisian-mcp-demo — Nautobot demo host
+#
+#   docker compose up
+#
+# That is the whole quickstart. No -f chain, no flags, no setup step.
+#
+# Compose auto-loads ./.env (committed, and holding published demo values
+# only) for interpolation. Every variable below also carries an inline
+# default, so the stack still boots if .env is edited or deleted.
+#
+# ─── SAFETY ────────────────────────────────────────────────────────────────
+# These images ship a pre-seeded database and *published, publicly known*
+# demo credentials by design. Published ports are therefore bound to
+# 127.0.0.1 by default. Do not expose this stack to a network you do not
+# control. See ../README.md.
+# ───────────────────────────────────────────────────────────────────────────
+
+name: frisian-mcp-demo-nautobot
+
+# Container environment is defined here rather than via `env_file:` on each
+# service. `env_file:` is mandatory in Compose — a missing .env aborts the
+# whole stack — whereas these defaults degrade gracefully, and .env still
+# overrides every one of them through interpolation.
+
+x-db-env: &db_env
+  POSTGRES_DB: "${POSTGRES_DB:-nautobot}"
+  POSTGRES_USER: "${POSTGRES_USER:-nautobot}"
+  POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-nautobot}"
+
+x-app-env: &app_env
+  NAUTOBOT_CONFIG: "${NAUTOBOT_CONFIG:-/opt/nautobot/nautobot_config.py}"
+  NAUTOBOT_ALLOWED_HOSTS: "${NAUTOBOT_ALLOWED_HOSTS:-localhost 127.0.0.1 [::1]}"
+  NAUTOBOT_INSTALLATION_METRICS_ENABLED: "${NAUTOBOT_INSTALLATION_METRICS_ENABLED:-false}"
+
+  # Left off on purpose. The upstream entrypoint's superuser hook resets the
+  # admin password and rewrites the admin API token on EVERY boot, silently
+  # overriding the identities the image was provisioned with.
+  NAUTOBOT_CREATE_SUPERUSER: "${NAUTOBOT_CREATE_SUPERUSER:-false}"
+
+  # NAUTOBOT_SECRET_KEY is deliberately absent — generated per deployment on
+  # first boot and persisted to the demo_state volume.
+
+  # Frisian tokens are stored as HMAC-SHA256(raw, key), key =
+  # FRISIAN_MCP_HMAC_KEY falling back to SECRET_KEY. Since SECRET_KEY is
+  # per-deployment, this must be a fixed published constant or every baked
+  # demo token is unverifiable on first boot. Not a secret; the tokens it
+  # covers ship in the image by design.
+  FRISIAN_MCP_HMAC_KEY: "${FRISIAN_MCP_HMAC_KEY:-frisian-mcp-demo-public-hmac-key-do-not-reuse}"
+
+  NAUTOBOT_DB_HOST: "${NAUTOBOT_DB_HOST:-db}"
+  NAUTOBOT_DB_PORT: "${NAUTOBOT_DB_PORT:-5432}"
+  NAUTOBOT_DB_NAME: "${NAUTOBOT_DB_NAME:-nautobot}"
+  NAUTOBOT_DB_USER: "${NAUTOBOT_DB_USER:-nautobot}"
+  NAUTOBOT_DB_PASSWORD: "${NAUTOBOT_DB_PASSWORD:-nautobot}"
+  NAUTOBOT_DB_TIMEOUT: "${NAUTOBOT_DB_TIMEOUT:-300}"
+
+  NAUTOBOT_REDIS_HOST: "${NAUTOBOT_REDIS_HOST:-redis}"
+  NAUTOBOT_REDIS_PORT: "${NAUTOBOT_REDIS_PORT:-6379}"
+  NAUTOBOT_REDIS_PASSWORD: "${NAUTOBOT_REDIS_PASSWORD:-nautobot}"
+
+  # The stock entrypoint gives up waiting for the database after 30s, which a
+  # first-boot restore of the full estate exceeds comfortably. The healthcheck
+  # gate on `db` is the real protection; this is the second layer.
+  MAX_DB_WAIT_TIME: "${MAX_DB_WAIT_TIME:-600}"
+  DB_WAIT_TIMEOUT: "${DB_WAIT_TIMEOUT:-5}"
+
+services:
+
+  # ── Nautobot application (uwsgi) ─────────────────────────────────────────
+  nautobot:
+    # LOCKSTEP PIN — see the DEMO_TAG note under the `db` service below.
+    image: "ghcr.io/frisian-mcp/demo-nautobot:${DEMO_TAG:-v0.1.0}"
+    restart: unless-stopped
+    depends_on:
+      db:
+        # Not a sleep. The db image restores its baked dump on first boot and
+        # is deliberately unhealthy for the whole restore — see `db`.
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment: *app_env
+    ports:
+      # host-bind is 127.0.0.1 by default — see the SAFETY banner above.
+      - "${DEMO_BIND_HOST:-127.0.0.1}:${DEMO_HTTP_PORT:-8080}:8080"
+    volumes:
+      - media_root:/opt/nautobot/media
+      # Holds the per-deployment SECRET_KEY generated on first boot (N3).
+      # NOTE TO N2: the image must `mkdir -p /opt/nautobot/demo-state` and
+      # chown it to nautobot:nautobot, or this named volume mounts root-owned
+      # and the non-root runtime user cannot write the key.
+      - demo_state:/opt/nautobot/demo-state
+    healthcheck:
+      # The base image already defines `nautobot-server health_check`; it is
+      # restated here only to widen start_period for the first-boot path.
+      test: ["CMD", "nautobot-server", "health_check"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10m
+
+  # ── Pre-seeded PostgreSQL ────────────────────────────────────────────────
+  db:
+    # LOCKSTEP PIN. A dump is welded to the migration state that produced it.
+    # An app image and a db image from different builds give migration errors,
+    # so BOTH images resolve from the single DEMO_TAG variable. Do not give
+    # them independent version variables, and do not change one default
+    # without changing the other.
+    #
+    # This is NOT stock postgres — it is postgres plus the baked demo dump.
+    image: "ghcr.io/frisian-mcp/demo-nautobot-db:${DEMO_TAG:-v0.1.0}"
+    restart: unless-stopped
+    environment: *db_env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # TCP, not the unix socket, and this is load-bearing.
+      #
+      # While the baked .sql.gz is restoring, the postgres entrypoint runs a
+      # temporary server with `listen_addresses=''`. A default `pg_isready`
+      # talks to the unix socket and reports READY mid-restore — the app would
+      # then start against a half-populated database. Forcing TCP means this
+      # check cannot pass until the real server is listening, i.e. until the
+      # restore has finished.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      # Generous: first boot restores the full demo estate. Later boots are
+      # instant because pgdata persists.
+      start_period: 15m
+
+  # ── Redis (cache + celery broker) ────────────────────────────────────────
+  redis:
+    image: "redis:6-alpine"
+    restart: unless-stopped
+    command:
+      - sh
+      - -c
+      - redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-nautobot}"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -h localhost -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Celery worker ────────────────────────────────────────────────────────
+  celery_worker:
+    image: "ghcr.io/frisian-mcp/demo-nautobot:${DEMO_TAG:-v0.1.0}"
+    restart: unless-stopped
+    # Bypasses the image entrypoint on purpose. That entrypoint runs
+    # post_upgrade (i.e. migrate) and the superuser hook; letting three
+    # services run it concurrently races migrations against each other.
+    # The `nautobot` service owns that work and this waits for it.
+    entrypoint: ["nautobot-server", "celery", "worker", "-l", "INFO", "--events"]
+    depends_on:
+      nautobot:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment: *app_env
+    volumes:
+      - media_root:/opt/nautobot/media
+      - demo_state:/opt/nautobot/demo-state
+    healthcheck:
+      test: ["CMD-SHELL", "nautobot-server celery inspect ping --destination celery@$$HOSTNAME"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ── Celery beat ──────────────────────────────────────────────────────────
+  celery_beat:
+    image: "ghcr.io/frisian-mcp/demo-nautobot:${DEMO_TAG:-v0.1.0}"
+    restart: unless-stopped
+    entrypoint: ["nautobot-server", "celery", "beat", "-l", "INFO"]
+    depends_on:
+      nautobot:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment: *app_env
+    volumes:
+      - demo_state:/opt/nautobot/demo-state
+    # No healthcheck. The upstream dev harness checks a beat heartbeat file
+    # that depends on a config setting this image does not necessarily set;
+    # a check that cannot fail honestly is worse than none.
+
+volumes:
+  media_root:
+  pgdata:
+  demo_state:
