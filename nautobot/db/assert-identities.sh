@@ -132,11 +132,27 @@ apps=$(q "SELECT coalesce(string_agg(DISTINCT ct.app_label, ',' ORDER BY ct.app_
 [ "$apps" = "dcim,ipam" ] && note "ok    demo-netops writes dcim,ipam only" \
                           || bad "demo-netops write apps = '${apps}', expected 'dcim,ipam'"
 
-# ── 8. Nobody earned capabilities from a global exemption ──────────────────
-n=$(q "SELECT count(*) FROM users_objectpermission WHERE enabled AND users_objectpermission.id NOT IN
-        (SELECT objectpermission_id FROM users_objectpermission_users);")
-[ "$n" -eq 0 ] && note "ok    no unbound ObjectPermission" \
-               || bad "${n} enabled ObjectPermission(s) bound to no user — grants everyone"
+# ── 8. Every grant is bound to a named demo user, and to no group ──────────
+#
+# CORRECTED 2026-08-22. An earlier version of this check claimed an
+# ObjectPermission bound to no user "grants everyone". That is wrong, and the
+# source says so: nautobot/core/authentication.py resolves grants with
+#     Q(users=user_obj) | Q(groups__user=user_obj), enabled=True
+# so a permission bound to neither users nor groups grants NOBODY. It is dead
+# weight, not a hole.
+#
+# What is worth asserting is the opposite direction. This roster binds every
+# grant to one named user and uses no groups at all, because a group binding
+# widens a grant to whoever is in the group later — silently, and without
+# touching the permission. So: no group bindings, and nothing unbound.
+n=$(q "SELECT count(*) FROM users_objectpermission op WHERE op.enabled
+       AND op.id NOT IN (SELECT objectpermission_id FROM users_objectpermission_users);")
+[ "$n" -eq 0 ] && note "ok    every enabled grant is bound to a user" \
+               || bad "${n} enabled ObjectPermission(s) bound to no user — dead weight, or a group grant this roster does not use"
+
+n=$(q "SELECT count(*) FROM users_objectpermission_groups;")
+[ "$n" -eq 0 ] && note "ok    no group-bound grants" \
+               || bad "${n} group binding(s); this roster binds users only, so a group grant widens it invisibly"
 
 echo
 if [ "$fail" -eq 0 ]; then echo "PASS — provisioned identity set is exactly as specified."; exit 0

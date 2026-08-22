@@ -179,7 +179,12 @@ def upsert_user(username, *, is_superuser=False):
 
 def upsert_permission(name, user, actions, content_types):
     """Create or update an ObjectPermission bound to exactly *user*."""
-    perm, _ = ObjectPermission.objects.get_or_create(name=name)
+    # `actions` is NOT NULL, so it must be supplied in the INSERT itself —
+    # get_or_create(name=...) alone inserts a NULL and fails the constraint.
+    perm, _ = ObjectPermission.objects.get_or_create(
+        name=name,
+        defaults={"actions": list(actions), "enabled": True},
+    )
     perm.enabled = True
     perm.actions = list(actions)
     perm.save()
