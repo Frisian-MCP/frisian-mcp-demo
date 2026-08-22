@@ -29,6 +29,11 @@ on:
         required: false
         default: false
         type: boolean
+      frisian_mcp_spec:
+        description: "Full pip requirement specifier for frisian-mcp, e.g. 'frisian-mcp==1.0.12' or 'frisian-mcp[usage]==1.1.0'."
+        required: false
+        default: ""
+        type: string
   push:
     tags:
       - "nautobot-v*"
@@ -44,10 +49,21 @@ env:
   REGISTRY: ghcr.io
   APP_IMAGE: ghcr.io/frisian-mcp/demo-nautobot
   DB_IMAGE: ghcr.io/frisian-mcp/demo-nautobot-db
-  POSTGRES_MAJOR: "14" # MUST match the server major that produced the source dump — see below
+  # Measured window is 14 <= server <= 17: Nautobot 3.2.3 sets a 14.0 floor and
+  # states no ceiling, but the app image ships libpq 17, which is the real one.
+  # 17 sits at the top of that window and is version-matched to both the
+  # pg_dump producing the archive and the client in the app image.
+  # Revisit only if D1 reports the source server major above 17.
+  POSTGRES_MAJOR: "17"
   SEED_DB_NAME: nautobot
   SEED_DB_USER: nautobot
   SEED_DB_PASSWORD: nautobot
+  # Single source for the frisian-mcp pin. N2's Dockerfile takes the whole
+  # requirement specifier as one ARG, so moving between a released pin and the
+  # [usage] extra is a one-token change here with no Dockerfile conditionals.
+  # The [usage] extra exists only in the unreleased 1.1.0 tree, so a released
+  # pin silently degrades token counting to the approximate path.
+  FRISIAN_MCP_SPEC_DEFAULT: "frisian-mcp==1.0.12"
 
 jobs:
 
@@ -84,7 +100,7 @@ jobs:
     needs: resolve
     services:
       postgres:
-        image: postgres:14 # pinned literal: `services:` cannot read env context
+        image: postgres:17 # pinned literal: `services:` cannot read env context
         env:
           POSTGRES_DB: nautobot
           POSTGRES_USER: nautobot
@@ -109,8 +125,8 @@ jobs:
           # twice. This fails the build rather than letting them drift, which
           # would restore the dump under a different major than the demo image
           # ships — silent, and only visible much later.
-          if [ "${POSTGRES_MAJOR}" != "14" ]; then
-            echo "::error::POSTGRES_MAJOR is ${POSTGRES_MAJOR} but the seed service is pinned to 14. Update both."
+          if [ "${POSTGRES_MAJOR}" != "17" ]; then
+            echo "::error::POSTGRES_MAJOR is ${POSTGRES_MAJOR} but the seed service is pinned to 17. Update both."
             exit 1
           fi
 
@@ -162,6 +178,7 @@ jobs:
           # rather than silently compiling it under emulation later.
           build-args: |
             PIP_ONLY_BINARY=:all:
+            FRISIAN_MCP_SPEC=${{ github.event.inputs.frisian_mcp_spec || env.FRISIAN_MCP_SPEC_DEFAULT }}
 
       - name: Migrate to the target stack
         run: |
@@ -345,6 +362,7 @@ jobs:
           sbom: true
           build-args: |
             PIP_ONLY_BINARY=:all:
+            FRISIAN_MCP_SPEC=${{ github.event.inputs.frisian_mcp_spec || env.FRISIAN_MCP_SPEC_DEFAULT }}
 
       - name: Confirm both images resolve on both arches at the same tag
         run: |
