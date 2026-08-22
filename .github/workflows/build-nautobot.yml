@@ -1,0 +1,374 @@
+# Build and publish the Nautobot demo images.
+#
+# Shape: SEED ONCE NATIVELY, THEN BAKE MULTI-ARCH.
+#
+#   seed     amd64 only, native. Restore the source dump, migrate to the
+#            target stack, provision demo identities, pg_dump. Output is SQL
+#            TEXT, which is architecture-independent.
+#   verify   amd64 only, loaded not pushed. Build both images and run the
+#            acceptance checks against them BEFORE anything reaches GHCR.
+#   publish  linux/amd64 + linux/arm64, pushed. The db image is a file copy,
+#            so emulation costs nothing on the arm64 leg.
+#
+# Do not collapse seed into the matrix build. Baking a pre-initialised PGDATA
+# would make the seed output architecture-sensitive and drag Postgres startup,
+# migrations and provisioning through QEMU on the arm64 leg. If you find
+# yourself running migrations under emulation, the structure has gone wrong.
+
+name: build-nautobot
+
+on:
+  workflow_dispatch:
+    inputs:
+      demo_tag:
+        description: "Tag applied to BOTH images (app and db). Lockstep — never set these separately."
+        required: true
+        type: string
+      publish:
+        description: "Push to GHCR. Unchecked = build and verify only."
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - "nautobot-v*"
+
+concurrency:
+  # Serialised per tag: two runs publishing the same DEMO_TAG could push an app
+  # image from one run and a db image from another, which is exactly the mixed
+  # state the single-tag pin exists to prevent.
+  group: build-nautobot-${{ github.event.inputs.demo_tag || github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  APP_IMAGE: ghcr.io/frisian-mcp/demo-nautobot
+  DB_IMAGE: ghcr.io/frisian-mcp/demo-nautobot-db
+  POSTGRES_MAJOR: "14" # MUST match the server major that produced the source dump — see below
+  SEED_DB_NAME: nautobot
+  SEED_DB_USER: nautobot
+  SEED_DB_PASSWORD: nautobot
+
+jobs:
+
+  # ─────────────────────────────────────────────────────────────────────────
+  resolve:
+    name: Resolve the lockstep tag
+    runs-on: ubuntu-latest
+    outputs:
+      demo_tag: ${{ steps.tag.outputs.demo_tag }}
+      publish: ${{ steps.tag.outputs.publish }}
+    steps:
+      - id: tag
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # refs/tags/nautobot-v1.2.3 -> v1.2.3
+            tag="${GITHUB_REF_NAME#nautobot-}"
+            publish=true
+          else
+            tag="${{ github.event.inputs.demo_tag }}"
+            publish="${{ github.event.inputs.publish }}"
+          fi
+          if [ -z "$tag" ]; then
+            echo "::error::No demo tag resolved."; exit 1
+          fi
+          echo "demo_tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "Both images will be tagged: $tag"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  seed:
+    name: Seed (amd64, native)
+    runs-on: ubuntu-latest
+    needs: resolve
+    services:
+      postgres:
+        image: postgres:14 # pinned literal: `services:` cannot read env context
+        env:
+          POSTGRES_DB: nautobot
+          POSTGRES_USER: nautobot
+          POSTGRES_PASSWORD: nautobot
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U nautobot -d nautobot"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:6-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 10s
+          --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard — the pinned Postgres major must match the services major
+        run: |
+          set -euo pipefail
+          # `services:` above cannot interpolate env, so the major is written
+          # twice. This fails the build rather than letting them drift, which
+          # would restore the dump under a different major than the demo image
+          # ships — silent, and only visible much later.
+          if [ "${POSTGRES_MAJOR}" != "14" ]; then
+            echo "::error::POSTGRES_MAJOR is ${POSTGRES_MAJOR} but the seed service is pinned to 14. Update both."
+            exit 1
+          fi
+
+      - name: Fetch the source dump
+        env:
+          SOURCE_DUMP_URL: ${{ secrets.SOURCE_DUMP_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SOURCE_DUMP_URL:-}" ]; then
+            echo "::error::SOURCE_DUMP_URL is not configured."
+            echo "The source dump is NOT in this repository and must never be."
+            echo "It carries credentials that are live against an internet-facing host."
+            echo "See the C1 open item in the build room before configuring this."
+            exit 1
+          fi
+          curl -fsSL --retry 3 "$SOURCE_DUMP_URL" -o source.sql.gz
+          echo "Fetched $(stat -c%s source.sql.gz) bytes"
+
+      - name: Restore the source dump
+        env:
+          PGPASSWORD: ${{ env.SEED_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # ON_ERROR_STOP is mandatory. Without it a failing preamble line
+          # yields a PARTIAL restore that looks plausible and bakes a demo
+          # missing arbitrary parts of the estate.
+          gunzip -c source.sql.gz \
+            | psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U "$SEED_DB_USER" -d "$SEED_DB_NAME"
+
+      - name: Record the inherited migration state
+        env:
+          PGPASSWORD: ${{ env.SEED_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          psql -h 127.0.0.1 -U "$SEED_DB_USER" -d "$SEED_DB_NAME" -At \
+            -c "SELECT app || '.' || name FROM django_migrations ORDER BY app, name" \
+            > migrations-before.txt
+          echo "Inherited migrations: $(wc -l < migrations-before.txt)"
+
+      - name: Build the app image (amd64, for migrate + provision)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./nautobot
+          file: ./nautobot/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: demo-nautobot:seed
+          # Fails the build if any dependency lacks an arm64-compatible wheel
+          # rather than silently compiling it under emulation later.
+          build-args: |
+            PIP_ONLY_BINARY=:all:
+
+      - name: Migrate to the target stack
+        run: |
+          set -euo pipefail
+          docker run --rm --network host \
+            -e NAUTOBOT_DB_HOST=127.0.0.1 \
+            -e NAUTOBOT_DB_NAME="$SEED_DB_NAME" \
+            -e NAUTOBOT_DB_USER="$SEED_DB_USER" \
+            -e NAUTOBOT_DB_PASSWORD="$SEED_DB_PASSWORD" \
+            -e NAUTOBOT_REDIS_HOST=127.0.0.1 \
+            -e NAUTOBOT_SECRET_KEY=seed-only-not-published \
+            -e NAUTOBOT_DOCKER_SKIP_INIT=true \
+            --entrypoint nautobot-server \
+            demo-nautobot:seed migrate --no-input
+
+      - name: Provision demo identities and reset inherited credentials
+        env:
+          FRISIAN_MCP_HMAC_KEY: ${{ vars.DEMO_HMAC_KEY }}
+        run: |
+          set -euo pipefail
+          # Owned by the D6 seat. Deletes every inherited credential (tokens,
+          # OAuth clients, password hashes, secrets) and mints demo identities
+          # under the demo HMAC key.
+          #
+          # Hard-failing on absence is deliberate: skipping this step would
+          # publish a public image carrying credentials that are live against
+          # an internet-facing host.
+          if [ ! -x nautobot/db/provision.sh ]; then
+            echo "::error::nautobot/db/provision.sh missing or not executable."
+            echo "Refusing to bake a dump that still carries inherited credentials."
+            exit 1
+          fi
+          if [ -z "${FRISIAN_MCP_HMAC_KEY:-}" ]; then
+            echo "::error::DEMO_HMAC_KEY repository variable is not set."
+            echo "Tokens minted under the wrong key are unverifiable at runtime."
+            exit 1
+          fi
+          ./nautobot/db/provision.sh
+
+      - name: Verify no inherited credentials survived
+        env:
+          PGPASSWORD: ${{ env.SEED_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # An independent check, not a re-run of provisioning. A control that
+          # has never been observed to refuse is not a control.
+          ./nautobot/db/assert-credentials-reset.sh
+
+      - name: Dump the golden artifact
+        env:
+          PGPASSWORD: ${{ env.SEED_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          pg_dump --no-owner --no-privileges \
+            -h 127.0.0.1 -U "$SEED_DB_USER" -d "$SEED_DB_NAME" \
+            | gzip -9 > demo.sql.gz
+          echo "Golden artifact: $(stat -c%s demo.sql.gz) bytes"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: demo-sql-${{ needs.resolve.outputs.demo_tag }}
+          path: demo.sql.gz
+          retention-days: 7
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: migration-state-${{ needs.resolve.outputs.demo_tag }}
+          path: migrations-before.txt
+          retention-days: 30
+
+  # ─────────────────────────────────────────────────────────────────────────
+  verify:
+    name: Verify (amd64, not published)
+    runs-on: ubuntu-latest
+    needs: [resolve, seed]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: demo-sql-${{ needs.resolve.outputs.demo_tag }}
+          path: nautobot/db/
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build both images, amd64 only, loaded locally
+        run: |
+          set -euo pipefail
+          docker buildx build --load --platform linux/amd64 \
+            -t "${APP_IMAGE}:${{ needs.resolve.outputs.demo_tag }}" \
+            -f nautobot/Dockerfile nautobot/
+          docker buildx build --load --platform linux/amd64 \
+            -t "${DB_IMAGE}:${{ needs.resolve.outputs.demo_tag }}" \
+            -f nautobot/db/Dockerfile nautobot/
+
+      - name: Acceptance — the zero-flag path, exactly as a user runs it
+        env:
+          DEMO_TAG: ${{ needs.resolve.outputs.demo_tag }}
+        run: |
+          set -euo pipefail
+          # No -f chain and no flags. If this needs a flag to pass, the demo
+          # is broken for every user regardless of whether CI is green.
+          cd nautobot
+          docker compose up -d --wait --wait-timeout 1800
+
+      - name: Acceptance — D5 checklist
+        run: |
+          set -euo pipefail
+          # Owned by the testing seat. Hard-fails if absent so a missing
+          # checklist cannot read as a passing build.
+          if [ ! -x common/ci/acceptance.sh ]; then
+            echo "::error::common/ci/acceptance.sh missing (D5). Refusing to publish unverified images."
+            exit 1
+          fi
+          ./common/ci/acceptance.sh
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          cd nautobot
+          docker compose ps || true
+          docker compose logs --no-color --tail 200 || true
+
+      - name: Tear down
+        if: always()
+        run: cd nautobot && docker compose down -v || true
+
+  # ─────────────────────────────────────────────────────────────────────────
+  publish:
+    name: Publish (multi-arch)
+    runs-on: ubuntu-latest
+    needs: [resolve, seed, verify]
+    if: needs.resolve.outputs.publish == 'true'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: demo-sql-${{ needs.resolve.outputs.demo_tag }}
+          path: nautobot/db/
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Both pushes are in one job on purpose. Split across jobs, a failure
+      # between them leaves one image published at a tag the other never
+      # reaches — the mixed state the lockstep pin exists to prevent.
+      - name: Push the db image (multi-arch)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./nautobot
+          file: ./nautobot/db/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.DB_IMAGE }}:${{ needs.resolve.outputs.demo_tag }}
+          provenance: true
+          sbom: true
+
+      - name: Push the app image (multi-arch)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./nautobot
+          file: ./nautobot/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.APP_IMAGE }}:${{ needs.resolve.outputs.demo_tag }}
+          provenance: true
+          sbom: true
+          build-args: |
+            PIP_ONLY_BINARY=:all:
+
+      - name: Confirm both images resolve on both arches at the same tag
+        run: |
+          set -euo pipefail
+          # Verifies the guarantee rather than assuming the pushes implied it.
+          for img in "${APP_IMAGE}" "${DB_IMAGE}"; do
+            echo "--- $img:${{ needs.resolve.outputs.demo_tag }}"
+            docker buildx imagetools inspect "$img:${{ needs.resolve.outputs.demo_tag }}" \
+              | tee /tmp/manifest.txt
+            for arch in amd64 arm64; do
+              grep -q "linux/$arch" /tmp/manifest.txt \
+                || { echo "::error::$img is missing linux/$arch"; exit 1; }
+            done
+          done
+
+      - name: Summary
+        run: |
+          {
+            echo "### Published"
+            echo ""
+            echo '```'
+            echo "${APP_IMAGE}:${{ needs.resolve.outputs.demo_tag }}"
+            echo "${DB_IMAGE}:${{ needs.resolve.outputs.demo_tag }}"
+            echo '```'
+            echo ""
+            echo "Both images carry the same tag. Do not pull them at different tags."
+          } >> "$GITHUB_STEP_SUMMARY"
