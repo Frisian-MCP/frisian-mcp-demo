@@ -56,11 +56,40 @@ ARG NAUTOBOT_VERSION=3.2.3
 # silently install the base package. Until 1.1.0 ships, the `_usage` block
 # degrades to the character-based approximation (encoding "approx-char4").
 #
-# OPEN: which version the first PUBLIC image pins is unresolved. 1.0.12
-# predates the 1.1.0 lean-envelope work and the post-1.1.0 hardening, so it
-# should not be what a public `docker pull` hands a stranger. Default below is
-# for internal rehearsal only.
-ARG FRISIAN_MCP_SPEC="frisian-mcp==1.0.12"
+# ⚠️ NO DEFAULT, DELIBERATELY. DO NOT ADD ONE BACK. (S-6)
+#
+# This ARG previously defaulted to "frisian-mcp==1.0.12". That default was not
+# merely stale, it was reachable by the one publish path that takes no inputs:
+# a `git push --tags` sets publish=true unconditionally, a push event carries
+# no workflow inputs, so the default was selected INSIDE the publish job and
+# went straight to public GHCR with nobody reviewing a form.
+#
+# The artifact that produces is the one measured at N3: on 1.0.12
+# FRISIAN_MCP_ROUTES does not exist, the doors 404 onto a single uncarved
+# /mcp/ mount, and a read-tier token reads extras -> secret. Every control
+# designed in this repo would be absent from the published image, and it would
+# look healthy from outside because the front door still returns a clean 401.
+#
+# Unset must FAIL THE BUILD, never pick a version. The guard is below.
+#
+# FLOOR: a frisian-mcp release containing H3 + H9 (the permission-aware and
+# tier lenses on the unknown-tool error path). That is NOT satisfied by 1.1.0
+# — `main` carries the 1.1.0 version string without those fixes, so a 1.1.0
+# pin would rehearse a fixed build and publish a leaky one. No such release
+# exists yet, which is why this correctly fails closed today.
+ARG FRISIAN_MCP_SPEC
+
+# Wheel-only tripwire. Measured at N2: the full stack resolves to 33 packages
+# with ZERO sdists on both arches, so this costs nothing today. It exists for
+# the day a dependency bump reintroduces one — without it, an sdist would be
+# COMPILED UNDER QEMU during the amd64 leg of a multi-arch build, turning a
+# two-minute build into a long one or a mysterious failure inside emulation.
+# With it, pip refuses at resolve time and says which package needs a wheel.
+#
+# Defaulted ON rather than set only in CI, so a local build and a CI build
+# fail the same way. To unblock a build deliberately, pass an empty value:
+#     docker build --build-arg PIP_ONLY_BINARY= ...
+ARG PIP_ONLY_BINARY=:all:
 
 ARG GOLDEN_CONFIG_VERSION=3.0.7
 ARG DNS_MODELS_VERSION=2.3.0
@@ -85,7 +114,18 @@ USER root
 # With it listed explicitly, that situation becomes a hard resolution error at
 # build time instead of a surprise at runtime. This is the modern replacement
 # for the harness's /tmp/nautobot-constraint.txt dance.
-RUN pip install --no-cache-dir \
+# Fail closed on an unset pin, with a diagnosis rather than a pip usage error.
+# An empty ARG would otherwise reach pip as an empty argument and fail with
+# something that does not say why.
+RUN test -n "${FRISIAN_MCP_SPEC}" || { \
+      echo "ERROR: build-arg FRISIAN_MCP_SPEC is required and has no default (S-6)."; \
+      echo "       Pass an explicit pin, e.g.:"; \
+      echo "         --build-arg FRISIAN_MCP_SPEC='frisian-mcp[usage]==<version>'"; \
+      echo "       The version MUST contain H3 + H9. 1.0.12 and 1.1.0 do NOT."; \
+      exit 1; \
+    }
+
+RUN pip install --no-cache-dir ${PIP_ONLY_BINARY:+--only-binary=${PIP_ONLY_BINARY}} \
       "nautobot==${NAUTOBOT_VERSION}" \
       "${FRISIAN_MCP_SPEC}" \
       "nautobot-golden-config==${GOLDEN_CONFIG_VERSION}" \
