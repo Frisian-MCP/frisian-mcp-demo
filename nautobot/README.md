@@ -261,7 +261,7 @@ the scoped identities above. It is fictional, and it is the part of the demo
 worth exploring:
 
 - **DC1** — primary data centre: 2 spine, 4 leaf, 1 edge router, 1 firewall
-- **DC2** — secondary site: 2 spine, 2 leaf, 1 edge router
+- **DC2** — secondary site: 2 spine, 1 leaf, 1 edge router
 - **BR1** — branch office: 1 router, 1 access switch
 
 14 devices and 424 interfaces across 4 locations and 4 racks, with two leaves
