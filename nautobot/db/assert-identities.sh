@@ -77,8 +77,9 @@ note "credential-shaped tables discovered: ${#candidates[@]}"
 declare -A EXPECTED=(
   [auth_user]=3                              # demo-readonly, demo-netops, demo-admin
   [frisian_mcp_tokens_frisianmcptoken]=3
-  [users_objectpermission]=3                 # readonly-view, netops-view, netops-write
-  [users_objectpermission_users]=3
+  [users_objectpermission]=6                 # 3 STOCK Nautobot + 3 roster (see STOCK_PERMS)
+  [users_objectpermission_users]=3           # roster only; the stock three bind groups, not users
+  [users_objectpermission_groups]=5          # STOCK Nautobot approval-workflow defaults
   [frisian_mcp_oauth_oauthclient]="${DEMO_EXPECTED_OAUTH_CLIENTS}"
   [frisian_mcp_oauth_oauthaccesstoken]=0
   [frisian_mcp_oauth_oauthauthorizeconsent]=0
@@ -161,27 +162,57 @@ apps=$(q "SELECT coalesce(string_agg(DISTINCT ct.app_label, ',' ORDER BY ct.app_
 [ "$apps" = "dcim,ipam" ] && note "ok    demo-netops writes dcim,ipam only" \
                           || bad "demo-netops write apps = '${apps}', expected 'dcim,ipam'"
 
-# ── 8. Every grant is bound to a named demo user, and to no group ──────────
+# ── 8. Grants: the STOCK baseline is named, and ours are user-bound ────────
 #
-# CORRECTED 2026-08-22. An earlier version of this check claimed an
-# ObjectPermission bound to no user "grants everyone". That is wrong, and the
-# source says so: nautobot/core/authentication.py resolves grants with
-#     Q(users=user_obj) | Q(groups__user=user_obj), enabled=True
-# so a permission bound to neither users nor groups grants NOBODY. It is dead
-# weight, not a hole.
+# CORRECTED TWICE, so both corrections are recorded.
 #
-# What is worth asserting is the opposite direction. This roster binds every
-# grant to one named user and uses no groups at all, because a group binding
-# widens a grant to whoever is in the group later — silently, and without
-# touching the permission. So: no group bindings, and nothing unbound.
-n=$(q "SELECT count(*) FROM users_objectpermission op WHERE op.enabled
-       AND op.id NOT IN (SELECT objectpermission_id FROM users_objectpermission_users);")
-[ "$n" -eq 0 ] && note "ok    every enabled grant is bound to a user" \
-               || bad "${n} enabled ObjectPermission(s) bound to no user — dead weight, or a group grant this roster does not use"
+# (1) An earlier version claimed an ObjectPermission bound to no user "grants
+#     everyone". Wrong: nautobot/core/authentication.py resolves grants with
+#         Q(users=user_obj) | Q(groups__user=user_obj), enabled=True
+#     so a permission bound to neither grants NOBODY — dead weight, not a hole.
+#
+# (2) The replacement said "no group bindings, nothing unbound". That can NEVER
+#     pass, because stock Nautobot 3.2.3 ships THREE enabled ObjectPermissions
+#     of its own, group-bound with no members, contributing 5 group rows.
+#     Verified on a pristine install with zero users and zero provisioning.
+#
+# The fix is a NAMED baseline rather than a looser count. Naming the three
+# means a future Nautobot adding a fourth fails loudly instead of widening the
+# allowance silently — the same property the "table fifteen" sweep exists for.
+#
+# They are not a hole today (group-bound, no members), but the instinct behind
+# the check still applies: anyone later added to one of these groups silently
+# acquires approval-workflow write access.
+STOCK_PERMS="nautobot-default-scheduledjobs-approver-permissions,nautobot-default-scheduledjobs-architect-permissions,nautobot-default-scheduledjobs-operator-permissions"
+ROSTER_PERMS="demo-netops-view,demo-netops-write,demo-readonly-view"
 
-n=$(q "SELECT count(*) FROM users_objectpermission_groups;")
-[ "$n" -eq 0 ] && note "ok    no group-bound grants" \
-               || bad "${n} group binding(s); this roster binds users only, so a group grant widens it invisibly"
+actual_perms=$(q "SELECT string_agg(name, ',' ORDER BY name) FROM users_objectpermission;")
+want_perms=$(printf '%s\n%s\n' "${STOCK_PERMS//,/$'\n'}" "${ROSTER_PERMS//,/$'\n'}" | sort | paste -sd, -)
+[ "$actual_perms" = "$want_perms" ] && note "ok    ObjectPermission names = stock(3) + roster(3)" \
+                                    || bad "ObjectPermission names differ.
+            got:  ${actual_perms}
+            want: ${want_perms}"
+
+# Every NON-STOCK grant must be bound to a named user. The stock three are
+# excluded by name, not by count, so a new unbound grant still fails.
+n=$(q "SELECT count(*) FROM users_objectpermission op
+       WHERE op.enabled
+         AND op.name NOT IN ('nautobot-default-scheduledjobs-approver-permissions',
+                             'nautobot-default-scheduledjobs-architect-permissions',
+                             'nautobot-default-scheduledjobs-operator-permissions')
+         AND op.id NOT IN (SELECT objectpermission_id FROM users_objectpermission_users);")
+[ "$n" -eq 0 ] && note "ok    every non-stock grant is bound to a named user" \
+               || bad "${n} non-stock ObjectPermission(s) bound to no user"
+
+# No NON-STOCK group binding. A group grant widens later, without the
+# permission itself being touched.
+n=$(q "SELECT count(*) FROM users_objectpermission_groups g
+       JOIN users_objectpermission op ON op.id = g.objectpermission_id
+       WHERE op.name NOT IN ('nautobot-default-scheduledjobs-approver-permissions',
+                             'nautobot-default-scheduledjobs-architect-permissions',
+                             'nautobot-default-scheduledjobs-operator-permissions');")
+[ "$n" -eq 0 ] && note "ok    no non-stock group bindings" \
+               || bad "${n} non-stock group binding(s); this roster binds users only"
 
 echo
 if [ "$fail" -eq 0 ]; then echo "PASS — provisioned identity set is exactly as specified."; exit 0
