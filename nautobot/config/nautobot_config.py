@@ -167,6 +167,41 @@ CACHES = {
     }
 }
 
+# ---------------------------------------------------------------------------
+# Heavy-response continuation cache (W016).
+#
+# frisian_mcp.W016 warns that continuation entries default to the SAME cache
+# that holds OAuth authorization codes and the token-endpoint rate counter, so
+# flooding one evicts the others — and the rate limiter fails OPEN when its
+# cache is unavailable. Its hint is explicit that a second logical Redis DB is
+# NOT sufficient, because logical DBs share one instance's memory budget.
+#
+# So this points at a SEPARATE Redis instance with its own eviction budget
+# (see the `redis-heavy` service in docker-compose.yml).
+#
+# ⚠️ THE ALIAS AND THE CACHE ARE SET TOGETHER, ON PURPOSE. Naming an alias that
+# CACHES does not define is frisian_mcp.E009 — an ERROR, not a warning — and
+# the base image entrypoint runs `nautobot-server check` and hard-exits on it.
+# The container would not boot. Deriving both from the same condition makes
+# that drift unreachable rather than merely unlikely: if the URL is absent we
+# set neither, W016 goes back to warning, and the stack still comes up.
+#
+# Do not "tidy" this by setting FRISIAN_MCP_HEAVY_CACHE_ALIAS somewhere else.
+# ---------------------------------------------------------------------------
+_HEAVY_CACHE_URL = os.getenv("FRISIAN_MCP_HEAVY_CACHE_URL", "").strip()
+if _HEAVY_CACHE_URL:
+    _HEAVY_CACHE_ALIAS = os.getenv("FRISIAN_MCP_HEAVY_CACHE_ALIAS", "heavy").strip() or "heavy"
+    CACHES[_HEAVY_CACHE_ALIAS] = {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": _HEAVY_CACHE_URL,
+        # Matches the package default continuation TTL. A continuation token
+        # outliving its cache entry is an unredeemable token, which is a
+        # confusing failure; keeping them equal avoids inventing a new one.
+        "TIMEOUT": 300,
+        "OPTIONS": {"CLIENT_CLASS": "django_redis.client.DefaultClient"},
+    }
+    FRISIAN_MCP_HEAVY_CACHE_ALIAS = _HEAVY_CACHE_ALIAS
+
 # Off by default — a demo should not phone home from someone's laptop.
 INSTALLATION_METRICS_ENABLED = is_truthy(
     os.getenv("NAUTOBOT_INSTALLATION_METRICS_ENABLED", "False")
