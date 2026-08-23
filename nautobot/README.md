@@ -235,6 +235,26 @@ $ curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8080/mcp/ -d
 There is no catch-all mount behind the three named doors. A route that is not
 mounted is absent rather than merely locked.
 
+## Known limitations
+
+**Bulk actions are listed but not invocable through the dispatcher.** A `help`
+response may include `bulk_update` and `bulk_partial_update` for a resource you
+can write:
+
+```text
+dcim/device    ... create  update  partial_update  bulk_update  bulk_partial_update
+```
+
+Calling one returns `-32602`, because a dispatcher's `params` is typed as an
+object and these actions require a list body:
+
+```text
+"code": -32602, "message": "Invalid arguments", "data": "[] is not of type 'object'"
+```
+
+Use the single-object actions — `create`, `update`, `partial_update` — one call
+per object.
+
 ## The demo estate
 
 A small multi-site enterprise, built entirely through MCP calls by agents using
