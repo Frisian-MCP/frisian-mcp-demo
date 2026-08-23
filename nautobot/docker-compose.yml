@@ -190,6 +190,17 @@ services:
     # copied, and a demo that boots with a security warning teaches the wrong
     # thing.
     #
+    # ⚠️ THIS SERVICE ALONE DOES NOT CLOSE W016. It is one half of a pair.
+    # The other half is in config/nautobot_config.py, which must define a
+    # CACHES entry from FRISIAN_MCP_HEAVY_CACHE_URL and set the
+    # FRISIAN_MCP_HEAVY_CACHE_ALIAS Django setting to match. Without it this
+    # container runs, answers pings, holds nothing, and W016 still fires —
+    # a service whose presence looks like the fix.
+    #
+    # Do not read this block as evidence the warning is handled. The evidence
+    # is `nautobot-server check` emitting no W016, which common/ci/
+    # acceptance.sh asserts.
+    #
     # redis:7 here while `redis` above is still on 6 (EOL upstream). Bumping
     # the broker is a separate, testable change against a running stack; a new
     # service starting on a supported version is not.
