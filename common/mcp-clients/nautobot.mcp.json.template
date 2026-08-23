@@ -4,21 +4,21 @@
       "type": "http",
       "url": "http://127.0.0.1:8080/mcp/read-only/",
       "headers": {
-        "Authorization": "Bearer D6_NAUTOBOT_READ_ONLY_TOKEN"
+        "Authorization": "Bearer frisian-demo-readonly-token-public-do-not-reuse"
       }
     },
     "frisian-nautobot-read-write": {
       "type": "http",
       "url": "http://127.0.0.1:8080/mcp/read-write/",
       "headers": {
-        "Authorization": "Bearer D6_NAUTOBOT_READ_WRITE_TOKEN"
+        "Authorization": "Bearer frisian-demo-netops-token-public-do-not-reuse"
       }
     },
     "frisian-nautobot-admin": {
       "type": "http",
       "url": "http://127.0.0.1:8080/mcp/admin/",
       "headers": {
-        "Authorization": "Bearer D6_NAUTOBOT_ADMIN_TOKEN"
+        "Authorization": "Bearer frisian-demo-admin-token-public-do-not-reuse"
       }
     }
   }

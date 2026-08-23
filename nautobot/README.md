@@ -1,20 +1,44 @@
 # Nautobot demo host
 
-Run the Nautobot frisian-mcp demo from this directory. This host ships two
-matched images: the Nautobot app image and the pre-seeded PostgreSQL image.
+A clone-and-run frisian-mcp demo against a real Nautobot instance, carrying a
+pre-built network estate and three pre-provisioned agent identities.
+
+This host ships two matched images: the Nautobot application image and the
+pre-seeded PostgreSQL image.
 
 ## Safety: localhost only
 
-This demo ships known, published credentials by design. They make the demo
-work with no setup step, but they also mean the stack is not safe to expose.
+**This demo ships known, published credentials by design.** Every token,
+password, and HMAC key in this directory is printed in the open, committed to
+this repository, and baked into the published images. They are what make the
+demo work with no setup step, and they are the reason it is not safe to expose.
 
-The default compose file binds the HTTP port to `127.0.0.1`. Leave it there
-unless you are on a network you control. Binding to `0.0.0.0` publishes a demo
-with public credentials.
+Treat this stack as public the moment it is reachable by anything but you.
 
-The MCP surface is locked. In the measured build, unauthenticated POST/GET
-requests to `/mcp/` returned `401`; an admin token saw `47` tools and a
-read-tier token saw `26`.
+The compose file binds the HTTP port to `127.0.0.1`. That is a control, not a
+default anyone should tidy up: binding to `0.0.0.0` publishes an instance whose
+administrative credentials are in a public git repository. Change
+`DEMO_BIND_HOST` only on a network you control, and rotate everything first if
+you intend to keep the instance.
+
+`ALLOWED_HOSTS` is a second gate behind that one. It ships as
+`localhost 127.0.0.1 [::1]`, so reaching the demo under any other hostname
+fails at the Django layer even if the bind address is widened. Both have to be
+changed deliberately; neither changes by accident.
+
+### The posture is locked
+
+Authentication is required on every door. Unauthenticated requests are refused,
+not served a reduced view:
+
+```console
+$ curl -i -X POST http://127.0.0.1:8080/mcp/read-only/ -d '{}'
+HTTP/1.1 401 Unauthorized
+```
+
+There is no unauthenticated walk-up mode in this image, and the setting that
+enforces it is not one to experiment with — removing it does not loosen the
+demo slightly, it republishes an open read door onto the whole estate.
 
 ## Quickstart
 
@@ -25,126 +49,306 @@ cd nautobot
 docker compose up
 ```
 
-No flags, no copied `.env`, no repo-root setup step. The committed `.env`
-contains published demo defaults and is part of the quickstart contract.
+No flags, no copied `.env`, no repository-root setup step. The committed `.env`
+holds published demo defaults and is part of the quickstart contract.
 
-When the app is healthy, the local HTTP endpoint is:
+When the stack is healthy the local endpoint is:
 
 ```text
 http://127.0.0.1:8080
 ```
 
-Use the client snippets one directory up to connect:
+The fastest confirmation that it works, using a token from the table below:
 
 ```bash
-TOKEN="D6_NAUTOBOT_READ_ONLY_TOKEN" \
+TOKEN="frisian-demo-readonly-token-public-do-not-reuse" \
 ROUTE="mcp/read-only" \
 ../common/mcp-clients/curl-tools-list.sh
 ```
 
-Replace the `D6_*` token placeholder with the final published demo token once
-the credential-reset pass lands.
+Twelve tools come back. The walkthrough below is what makes that interesting.
 
-## First boot
+## First boot, and every boot
 
-The database image restores its baked `demo.sql.gz` the first time the
-database starts. During that restore, the `db` service is intentionally not
-healthy and the app waits behind the compose healthcheck.
+The database image restores its baked demo estate when the database starts.
+**It does this on every start, not only the first** — this host deliberately
+persists no database volume, so each run begins from the same known estate and
+a fix shipped in a new image reaches everyone who pulls it. If you notice the
+restore happening again on a later `docker compose up`, that is the design and
+not a fault.
 
-Observed restore time: **pending D2/D4 measurement**.
+The restore takes **a few minutes**, during which the `db` service is
+intentionally not healthy and the application waits behind the compose
+healthcheck. The healthcheck allows up to 15 minutes before it gives up, so a
+wait of several minutes is inside the expected envelope.
 
-Do not replace that line with an estimate. The final number comes from the
-scratch restore/migration path and is written here so a first-time user knows
-whether the wait is normal.
+> No measured restore time is published here yet. The figure comes from
+> @release-engineering measuring the real image pair once the golden artifact
+> exists, and an optimistic number in this section would cause the exact
+> failure the section exists to prevent — a user reading a normal wait as a
+> hang because the documentation told them it should already be over.
 
-The starting change log is empty by design. Inherited object-change rows are
-truncated before the public artifact is baked because they are a build-time
-audit trail, not the demo estate. New changes made in the demo are logged
-normally.
+The demo's change log starts empty on purpose. The object-change history from
+building this estate is truncated before the public image is baked, because it
+is a build-time audit trail rather than part of the demo. Changes you make
+while using the demo are logged normally.
+
+## The demo identities
+
+Three identities, three doors, three tier ceilings. All tokens are fixed,
+published constants — reproducible in every build, and not secrets.
+
+| identity | door | tier ceiling | Django permissions |
+|---|---|---|---|
+| `demo-readonly` | `mcp/read-only` | `read` | `view` on the scoped estate |
+| `demo-netops` | `mcp/read-write` | `read_write` | `view` on all scoped apps; **write on `dcim` and `ipam` only** |
+| `demo-admin` | `mcp/admin` | `admin` | superuser |
+
+```text
+demo-readonly   Bearer frisian-demo-readonly-token-public-do-not-reuse
+demo-netops     Bearer frisian-demo-netops-token-public-do-not-reuse
+demo-admin      Bearer frisian-demo-admin-token-public-do-not-reuse
+```
+
+The same accounts log into the web UI at `http://127.0.0.1:8080` with the
+published password `frisian-demo-public-password`.
+
+**`demo-netops` is the deliberately interesting one.** Its door permits the
+write tier across all twelve scoped resource groups; its own permissions permit
+writes to two of them. The door's ceiling and the principal's grants are
+independent controls, and you can only tell them apart by watching an identity
+be refused something its door plainly allows. A refusal there is the feature.
+
+`demo-admin` is a superuser, so it bypasses per-object permissions entirely.
+That is the right contrast for the admin door, but it means the admin identity
+demonstrates the tier ceiling rather than the permission model. Do not read it
+as a scoped account.
 
 ## Demo walkthrough
 
-Use two identities against the same local stack:
+The point of frisian-mcp is that one server shows a **different tool surface to
+different agent identities**. There are two separate mechanisms doing that, and
+the walkthrough shows each one where it is actually visible.
 
-1. Connect to `http://127.0.0.1:8080/mcp/read-only/` with the read-only demo
-   token.
-2. Call `tools/list`.
-3. Reconnect to `http://127.0.0.1:8080/mcp/read-write/` with the scoped
-   read-write demo token.
-4. Call `tools/list` again.
+### Do not compare `tools/list` lengths on the scoped doors
 
-The surfaces differ. The read-tier token sees the reduced manifest measured at
-`26` tools; the full admin surface measured `47` tools. The scoped read-write
-identity is finalized by D6 and should be documented here once minted.
+Start here, because it is the intuitive move and it proves nothing:
 
-Sensitive resources, including secrets and the inherited object-change trail,
-are absent from the scoped routes. They do not merely fail at execution after
-appearing in discovery.
+```bash
+# read-only door, demo-readonly
+TOKEN="frisian-demo-readonly-token-public-do-not-reuse" ROUTE="mcp/read-only" \
+  ../common/mcp-clients/curl-tools-list.sh
+
+# read-write door, demo-netops
+TOKEN="frisian-demo-netops-token-public-do-not-reuse" ROUTE="mcp/read-write" \
+  ../common/mcp-clients/curl-tools-list.sh
+```
+
+Both return **12 tools, with identical names**. That is correct and expected.
+The scoped doors publish one dispatcher per resource group, and the group list
+is a property of the *route*, not of the caller. The per-identity difference is
+real, but it lives one level down — inside each dispatcher's action list.
+
+### 1. Same door, same token, two different answers
+
+Ask a dispatcher what it will let you do, with `action: "help"`:
+
+```bash
+TOKEN="frisian-demo-netops-token-public-do-not-reuse" ROUTE="mcp/read-write" \
+  ../common/mcp-clients/curl-help.sh dcim
+
+TOKEN="frisian-demo-netops-token-public-do-not-reuse" ROUTE="mcp/read-write" \
+  ../common/mcp-clients/curl-help.sh dns
+```
+
+One identity, one token, one door — and two different shapes:
+
+```text
+dcim   device      list  retrieve  notes  napalm  create  update  partial_update  ...
+dns    dnszone     list  retrieve  notes
+       arecord     list  retrieve  notes
+```
+
+`demo-netops` holds a `read_write` token on a `read_write` door, and still has
+no way to write a DNS zone, because its permissions only grant writes on `dcim`
+and `ipam`. The write actions are **absent from the listing**, not offered and
+then refused. An agent planning against this surface never proposes the call.
+
+That single contrast is the product. Everything else is a variation on it.
+
+### 2. Same group, two identities
+
+```bash
+TOKEN="frisian-demo-readonly-token-public-do-not-reuse" ROUTE="mcp/read-only" \
+  ../common/mcp-clients/curl-help.sh dcim
+```
+
+```text
+demo-readonly    device    list  retrieve  notes  napalm
+demo-netops      device    list  retrieve  notes  napalm  create  update  ...
+```
+
+Same resource, same server, different caller.
+
+### 3. More privilege does not mean more surface
+
+Compare the `extras` group across the two scoped doors:
+
+```text
+mcp/read-only     job    list  retrieve  notes  variables
+mcp/read-write    job    ABSENT
+```
+
+The **more** privileged door deliberately carries **less**. Running a Nautobot
+job is arbitrary code execution, so the resource is withheld from the door
+where the write tier would make it reachable, while the read-only door keeps
+the job catalogue browsable. Credential material is absent from both.
+
+### 4. What the scoped doors hide is really there
+
+```bash
+TOKEN="frisian-demo-admin-token-public-do-not-reuse" ROUTE="mcp/admin" \
+  ../common/mcp-clients/curl-tools-list.sh
+```
+
+47 tools, against 12 on the scoped doors — the full ungrouped surface,
+including everything the carve-outs removed.
+
+The admin door is also where per-identity counts become visible, because it
+applies no route carve of its own. The same three tokens against that one door:
+
+```text
+demo-readonly     23 tools
+demo-netops       38 tools
+demo-admin        47 tools
+```
+
+Same URL, same request, three different manifests.
+
+### 5. The doors are real
+
+```console
+$ curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8080/mcp/ -d '{}'
+404
+```
+
+There is no catch-all mount behind the three named doors. A route that is not
+mounted is absent rather than merely locked.
+
+## The demo estate
+
+A small multi-site enterprise, built entirely through MCP calls by agents using
+the scoped identities above. It is fictional, and it is the part of the demo
+worth exploring:
+
+- **DC1** — primary data centre: 2 spine, 4 leaf, 1 edge router, 1 firewall
+- **DC2** — secondary site: 2 spine, 2 leaf, 1 edge router
+- **BR1** — branch office: 1 router, 1 access switch
+
+14 devices and 424 interfaces across 4 locations and 4 racks, with two leaves
+carrying a full 48 ports each. Every leaf uplinks to both spines from its top
+ports, the edge router and firewall are patched in, and the branch router is
+cabled to its access switch — 14 cables in total.
+
+On top of that: 10 prefixes, 6 VLANs, and 14 addresses bound to real
+interfaces; 2 tenants; 2 carrier circuits with 4 terminations joining DC1 to
+DC2 and DC1 to the branch; a live BGP peering between the two edge ASNs; one
+DNS zone with records resolving to addresses that exist in the estate; and
+golden-config settings with a compliance feature and rule.
+
+The two full-port leaves are load-bearing rather than padding. Listing their
+interfaces is what exercises the read-side features this package exists for —
+pagination, the lean response envelope, and heavy-response negotiation, which
+begins at around 30 interfaces.
+
+## Connecting an MCP client
+
+Copy a block from
+[`../common/mcp-clients/nautobot.mcp.json.template`](../common/mcp-clients/nautobot.mcp.json.template)
+into your client configuration. The tokens are real and work as printed.
+
+Connect one identity at a time when demonstrating the contrast, so that what
+changes between two `help` calls is the identity and nothing else.
+
+### OAuth
+
+Static bearer tokens are the supported path for this demo and are what the
+shipped client configurations use.
+
+The server does advertise its OAuth metadata, so a spec-compliant client that
+receives a `401` can discover where the authorization server lives rather than
+dead-ending on a guessed URL. But every client-minting path is deliberately
+closed in this image — open registration, PKCE auto-registration, and automatic
+approval are all off — so a browser-based connect flow has nothing to register
+with today.
+
+> The browser-connect path is not documented here yet, deliberately. It is an
+> open item with @security and @PM; a pre-registered client has not landed in
+> the provisioning script. Use a static token until this section says otherwise.
+
+Access tokens issued by an OAuth flow are never baked into an image: they
+expire, and a baked one would be dead on arrival.
 
 ## Image pinning
 
-`DEMO_TAG` pins both images:
+`DEMO_TAG` pins both images to the same version:
 
 ```text
 ghcr.io/frisian-mcp/demo-nautobot:${DEMO_TAG}
 ghcr.io/frisian-mcp/demo-nautobot-db:${DEMO_TAG}
 ```
 
-The committed default is:
+The committed default is `DEMO_TAG=v0.1.0`.
 
-```text
-DEMO_TAG=v0.1.0
-```
-
-There is no `latest` tag. The app image and database image are a matched pair;
-running different tags is unsupported.
+**There is no `latest` tag.** The application image and the database image are
+a matched pair — the database contains identities whose tokens are verified by
+a key the application image carries, so running two different tags is
+unsupported and fails in ways that look like broken authentication.
 
 ## Environment
 
-You do not need to create `.env`. It is committed intentionally so a fresh
-clone works with `docker compose up`.
-
-Common values:
+You do not need to create `.env`; it is committed so that a fresh clone works
+with `docker compose up`.
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `DEMO_TAG` | `v0.1.0` | Single tag for both demo images |
-| `DEMO_BIND_HOST` | `127.0.0.1` | Host interface for published HTTP |
+| `DEMO_BIND_HOST` | `127.0.0.1` | Host interface for the published HTTP port |
 | `DEMO_HTTP_PORT` | `8080` | Host HTTP port |
-| `POSTGRES_DB` | `nautobot` | Database name |
-| `POSTGRES_USER` | `nautobot` | Database role required by the dump |
-| `FRISIAN_MCP_HMAC_KEY` | fixed demo value | HMAC key for baked demo tokens |
+| `NAUTOBOT_ALLOWED_HOSTS` | `localhost 127.0.0.1 [::1]` | Hostnames Django will answer to |
+| `POSTGRES_DB` / `POSTGRES_USER` | `nautobot` | Database name and role required by the dump |
+| `FRISIAN_MCP_HMAC_KEY` | fixed demo value | Key the baked demo tokens are verified against |
 
-`FRISIAN_MCP_HMAC_KEY` is public by design. Changing it breaks the baked demo
-tokens because their stored digests were minted under that key.
+`FRISIAN_MCP_HMAC_KEY` is public by design and must not be changed: the demo
+tokens are stored as digests computed under that key, so replacing it
+invalidates all three identities at once, silently.
+
+`NAUTOBOT_SECRET_KEY` is deliberately absent. It is generated per deployment on
+first boot and persisted to the `demo_state` volume, so no two deployments of
+this public image share a session-signing key.
 
 For the full annotated reference, read [`.env.example`](.env.example).
 
 ## Local build
 
-The normal path pulls images from GHCR. To build both images locally:
+The default path pulls prebuilt images. To build both locally:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
 ```
 
-The local database image build requires `db/demo.sql.gz`. That file is not in
-git; CI injects the credential-reset golden artifact. A local build without it
-should fail rather than produce an empty database image.
+The database image build requires `db/demo.sql.gz`, which is not committed. CI
+injects the golden artifact after inherited credentials have been reset. A
+local build without that file fails rather than producing an empty or unsafe
+demo image.
 
 ## Stop and reset
 
-Stop the stack:
-
 ```bash
-docker compose down
+docker compose down      # stop
+docker compose down -v   # stop and discard local state
 ```
 
-Reset local demo state:
-
-```bash
-docker compose down -v
-```
-
-The reset deletes local volumes, including the restored demo database and the
-per-deployment secret key generated on first boot.
+Because no database volume is persisted, the estate returns to its baked state
+on the next start either way. `-v` additionally discards the generated secret
+key, which invalidates existing browser sessions but not the demo tokens.
