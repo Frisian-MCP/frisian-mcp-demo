@@ -24,6 +24,18 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Build args must be declared here or they never reach the Dockerfile:
+      # compose does NOT forward the environment into a build. Without this the
+      # documented escape hatch fails the S-6 guard no matter what the user
+      # exports, which is exactly what happened.
+      #
+      # All default EMPTY so the guard keeps failing closed -- compose must not
+      # be the thing that silently picks a lane.
+      args:
+        FRISIAN_MCP_SPEC: "${FRISIAN_MCP_SPEC:-}"
+        FRISIAN_MCP_LOCAL_WHEEL: "${FRISIAN_MCP_LOCAL_WHEEL:-}"
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-}"
+        PIP_EXTRA_INDEX_URL: "${PIP_EXTRA_INDEX_URL:-}"
     image: "ghcr.io/frisian-mcp/demo-nautobot:${DEMO_TAG:-v0.1.0}"
 
   db:
@@ -36,10 +48,34 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Build args must be declared here or they never reach the Dockerfile:
+      # compose does NOT forward the environment into a build. Without this the
+      # documented escape hatch fails the S-6 guard no matter what the user
+      # exports, which is exactly what happened.
+      #
+      # All default EMPTY so the guard keeps failing closed -- compose must not
+      # be the thing that silently picks a lane.
+      args:
+        FRISIAN_MCP_SPEC: "${FRISIAN_MCP_SPEC:-}"
+        FRISIAN_MCP_LOCAL_WHEEL: "${FRISIAN_MCP_LOCAL_WHEEL:-}"
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-}"
+        PIP_EXTRA_INDEX_URL: "${PIP_EXTRA_INDEX_URL:-}"
     image: "ghcr.io/frisian-mcp/demo-nautobot:${DEMO_TAG:-v0.1.0}"
 
   celery_beat:
     build:
       context: .
       dockerfile: Dockerfile
+      # Build args must be declared here or they never reach the Dockerfile:
+      # compose does NOT forward the environment into a build. Without this the
+      # documented escape hatch fails the S-6 guard no matter what the user
+      # exports, which is exactly what happened.
+      #
+      # All default EMPTY so the guard keeps failing closed -- compose must not
+      # be the thing that silently picks a lane.
+      args:
+        FRISIAN_MCP_SPEC: "${FRISIAN_MCP_SPEC:-}"
+        FRISIAN_MCP_LOCAL_WHEEL: "${FRISIAN_MCP_LOCAL_WHEEL:-}"
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-}"
+        PIP_EXTRA_INDEX_URL: "${PIP_EXTRA_INDEX_URL:-}"
     image: "ghcr.io/frisian-mcp/demo-nautobot:${DEMO_TAG:-v0.1.0}"
