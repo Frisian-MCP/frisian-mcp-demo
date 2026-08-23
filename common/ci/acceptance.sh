@@ -204,6 +204,12 @@ bgp|autonomoussystem|2|
 dns|dnszone|1|
 dns|arecord|2|
 golden_config|goldenconfigsetting|1|
+dcim|cable|14|B2 step 7, built by B4b
+ipam|ipaddresstointerface|14|B2 step 9, built by B4b — every IP bound to a port
+bgp|peering|1|B2 step 11, built by B4b
+bgp|peerendpoint|2|both ends of the peering; see the content assertion below
+golden_config|compliancerule|1|B2 step 13, built by B4b
+golden_config|compliancefeature|1|the rule needs a feature to attach to
 "
 
 while IFS='|' read -r grp res want why; do
@@ -222,55 +228,32 @@ done <<EOF
 $ESTATE
 EOF
 
-# ── 3b. Declared deviations from the B2 spec ───────────────────────────────
+# ── 3b. The BGP peering is meaningful, not merely present ──────────────────
 #
-# 🔴 RULED 2026-08-23 — BUILD ALL FOUR. Opened as B4b (42cd443b), nautobot
-# seat. They were NOT scoped out, so these assertions stay RED until the
-# objects exist. That is the correct state for a checklist to sit in while the
-# work it is waiting on is open, and it is why there is no flag here to make
-# it green early.
+# A count is not evidence the object demonstrates anything. Measured during
+# B4b: the first `bgp/peering` create returned **201** and produced a peering
+# whose display was "None ↔︎ None" with zero endpoints — an object that
+# satisfies `peering = 1` and shows nothing. It was caught by inspecting the
+# object, not by trusting the status code.
 #
-# The deciding argument was B2's own: tier B was chosen over tier A because
-# "cable topology is non-trivial", so scoping cables out would retroactively
-# empty the reason the scale was picked. The compliance rule was asked for
-# specifically so the plugin "has something to show".
-#
-# HOW THEY WERE MISSED, because that is the part worth keeping: all four are
-# named in the B2 build order, are EMPTY in the built estate, and produced
-# ZERO calls in b4_build/*.jsonl — not attempts, not refusals, not errors.
-# B4's record stated "Deviations from the B2 spec: None in the estate." A gap
-# that generates no signal at all is a different failure mode from one that
-# fails loudly, and it is the reason this check counts objects rather than
-# reading a build log.
-#
-# WHEN B4b LANDS: move these four rows up into the ESTATE table with their
-# real expected counts and delete this block. It exists for categories that
-# are legitimately empty; after B4b, none of them are.
-DEVIATIONS="
-dcim|cable|0|B2 step 7 — pending B4b, never attempted in B4
-ipam|ipaddresstointerface|0|B2 step 9 — pending B4b, never attempted in B4
-bgp|peering|0|B2 step 11 — pending B4b, ASNs exist but no peerings
-golden_config|compliancerule|0|B2 step 13 — pending B4b, settings exist but no rule
-"
-# 1 while B4b is open. There is deliberately no path that turns these green
-# without the objects existing.
-UNRULED_DEVIATIONS=1
-
-hdr "3b. B2 categories that are empty"
-while IFS='|' read -r grp res want why; do
-  [ -z "${grp:-}" ] && continue
-  resp=$(mcp "$TOK_ADM" "mcp/admin" "$grp" "$res" "list" '{"limit":1}')
-  got=$(extract_count "$resp")
-  if [ "$got" = "$want" ] && [ "$UNRULED_DEVIATIONS" -eq 0 ]; then
-    ok "$grp/$res = $got  ($why)"
-  elif [ "$got" = "$want" ]; then
-    bad "$grp/$res = $got  ($why)"
-  else
-    ok "$grp/$res = $got — no longer empty; update the DEVIATIONS block ($why)"
-  fi
-done <<EOF
-$DEVIATIONS
-EOF
+# Asserted on the ENDPOINTS, one at a time, and not on the peering's own
+# display string. The peering display joins both ends with a "↔︎" that arrives
+# as a \u2194 escape, so a `[^\\]*` extraction stops at the first backslash
+# and only ever sees the FIRST endpoint — a peering with a good first end and
+# a null second end would pass. Each peerendpoint display is a single address
+# with no escapes, so checking them individually has no such blind spot.
+hdr "3b. The BGP peering resolves at both ends"
+resp=$(mcp "$TOK_ADM" "mcp/admin" "bgp" "peerendpoint" "list" '{}')
+eps=$(printf '%s' "$resp" | grep -o '\\"display\\": \\"[^\\]*' | sed 's/.*\\"//')
+n_total=$(printf '%s\n' "$eps" | grep -c . )
+n_bad=$(printf '%s\n' "$eps" | grep -c '^None$' )
+if [ "$n_total" -ne 2 ]; then
+  bad "read $n_total peerendpoint display(s), expected 2 — an endpoint is missing or null"
+elif [ "$n_bad" -ne 0 ]; then
+  bad "$n_bad peerendpoint(s) did not resolve to an address. A 201 is not evidence the object is meaningful."
+else
+  ok "both peerendpoints resolve: $(printf '%s' "$eps" | tr '\n' ' ')"
+fi
 
 # ── 4. UI loads ────────────────────────────────────────────────────────────
 #
