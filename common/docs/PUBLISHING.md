@@ -28,6 +28,60 @@ tag.
 
 ---
 
+## Three lanes, and only one of them ships
+
+Where `frisian-mcp` comes from is a separate axis from which tag gets built.
+The workflow's `lane` input carries it, and it defaults to `rehearsal` — the
+lane that cannot publish — so a missing or unrecognised value never falls
+through to the one that can.
+
+| lane | source | validates | may publish |
+|---|---|---|---|
+| `rehearsal` | local source tree | today's work | **no** |
+| `testpypi` | Test PyPI | the packaged **artifact** | **no** |
+| `release` | real PyPI | what users get | **yes** |
+
+### Why the middle lane exists
+
+It tests the one thing a local source build cannot: that the built wheel
+contains what we think it does. This package has already shipped a wheel whose
+`[usage]` extra was present in the tree and **absent from the published
+metadata**, so `pip install frisian-mcp[usage]` warned and silently installed
+the base package. An editable install from source can never catch that.
+
+### Why it must not ship
+
+Test PyPI is explicitly non-durable — files can be deleted and it prunes. A
+public image whose build resolved from it breaks silently later, and its
+provenance is weak. Fine for validating our own work; not fine underneath
+someone else's `docker pull`, where the image outlives the index it came from.
+
+### The index is not part of the requirement specifier
+
+Test PyPI needs `--index-url` plus real PyPI as an extra index, because it does
+not carry Django, DRF or jsonschema. Those flags are passed as **separate build
+args**, and `FRISIAN_MCP_SPEC` stays a bare version pin in every lane.
+
+That split is deliberate. The publish gate rejects any spec carrying index
+flags, and that rejection is what keeps an arbitrary package index out of a
+published image. Folding the flags into the spec to make Test PyPI work would
+mean widening the one check standing between GHCR and a wheel from anywhere.
+Do not do it.
+
+The gate refuses a publish when the lane is not `release`, **and** independently
+when any index override is set — the second is redundant while the first holds,
+which is the point.
+
+### The lane must actually be wired
+
+Docker ignores a build-arg the Dockerfile does not declare, and only warns. A
+`testpypi` build against a Dockerfile without `ARG PIP_INDEX_URL` would install
+from real PyPI and report success — a pre-release lane validating the wrong
+artifact, which is worse than having no lane at all. The workflow greps for the
+`ARG` declarations and fails closed if they are missing.
+
+---
+
 ## Tagging
 
 ### Canonical tag: demo-repo semver, immutable

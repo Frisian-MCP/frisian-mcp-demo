@@ -35,8 +35,14 @@ on:
         description: "Full pip requirement specifier for frisian-mcp. REQUIRED — there is no default. Publishing additionally requires a PyPI pin at or above the hardening floor."
         required: true
         type: string
+      lane:
+        description: "Where frisian-mcp comes from. Only 'release' may publish to GHCR."
+        required: false
+        default: rehearsal
+        type: choice
+        options: [rehearsal, testpypi, release]
       publish:
-        description: "Push to GHCR. Unchecked = build and verify only."
+        description: "Push to GHCR. Unchecked = build and verify only. Ignored unless lane=release."
         required: false
         default: false
         type: boolean
@@ -70,17 +76,20 @@ env:
   # The publish floor. A release BELOW this cannot contain H3 + H9, and the
   # demo's whole posture depends on them.
   #
-  # This version does not exist on PyPI yet. That is deliberate: the gate fails
-  # closed and the pipeline states that the demo is not publishable today,
-  # rather than waiting to be told. Raising it is a deliberate act by whoever
-  # confirms which release actually carries the hardening.
+  # Lowered 1.1.1 -> 1.1.0. The floor was set above 1.1.0 only because a 1.1.0
+  # might have been cut from a tree without the hardening. PR #62 merged, so
+  # `origin/main` IS 1.1.0 with the hardening — verified as `git diff --stat
+  # feat/post-1.1.0-hardening origin/main -- src/` being empty — and no v1.1.0
+  # tag exists anywhere, so the hardening-less 1.1.0 can no longer happen.
   #
-  # A version number is NOT evidence of content — `main` also calls itself
-  # 1.1.0 and lacks the hardening. The content check lives in nautobot/
-  # Dockerfile, which asserts the hardening symbols are present in the
-  # installed package at build time. Do not remove it on the assumption that
-  # this floor covers it. It does not; they are two different checks.
-  FRISIAN_MCP_MIN_VERSION: "1.1.1"
+  # A floor kept artificially high stops being a gate and becomes superstition.
+  #
+  # A version number is STILL not evidence of content. This is a coarse filter
+  # in front of the real guarantee, which is the build-time assertion in
+  # nautobot/Dockerfile that the hardening symbols are importable from the
+  # installed package. Do not remove that on the assumption this floor covers
+  # it. It does not; they are two different checks.
+  FRISIAN_MCP_MIN_VERSION: "1.1.0"
 
 jobs:
 
@@ -92,6 +101,9 @@ jobs:
       demo_tag: ${{ steps.tag.outputs.demo_tag }}
       publish: ${{ steps.tag.outputs.publish }}
       spec: ${{ steps.tag.outputs.spec }}
+      lane: ${{ steps.tag.outputs.lane }}
+      pip_index_url: ${{ steps.tag.outputs.pip_index_url }}
+      pip_extra_index_url: ${{ steps.tag.outputs.pip_extra_index_url }}
     steps:
       - id: tag
         run: |
@@ -99,10 +111,19 @@ jobs:
           if [ "${{ github.event_name }}" = "push" ]; then
             tag="${GITHUB_REF_NAME#nautobot-}"   # refs/tags/nautobot-v1.2.3 -> v1.2.3
             publish=true
+            lane=release
           else
             tag="${{ github.event.inputs.demo_tag }}"
             publish="${{ github.event.inputs.publish }}"
+            # Defaults to `rehearsal`, the lane that cannot publish. A missing
+            # or unrecognised value must not fall through to the one that can.
+            lane="${{ github.event.inputs.lane }}"
+            lane="${lane:-rehearsal}"
           fi
+          case "$lane" in
+            rehearsal|testpypi|release) ;;
+            *) echo "::error::Unknown lane '$lane'."; exit 1 ;;
+          esac
           spec="${{ github.event.inputs.frisian_mcp_spec }}"
 
           [ -n "$tag" ] || { echo "::error::No demo tag resolved."; exit 1; }
@@ -119,6 +140,28 @@ jobs:
           echo "demo_tag=$tag"   >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
           echo "spec=$spec"      >> "$GITHUB_OUTPUT"
+          echo "lane=$lane"      >> "$GITHUB_OUTPUT"
+          echo "lane: $lane"
+
+          # The index is a SEPARATE axis from the requirement specifier, on
+          # purpose. Test PyPI needs --index-url plus real PyPI as an extra
+          # index (it does not carry Django, DRF or jsonschema), but folding
+          # those flags into FRISIAN_MCP_SPEC would mean widening the publish
+          # gate to admit index flags — and that gate rejecting them is the
+          # thing keeping an arbitrary index out of a published image.
+          #
+          # So the spec stays a bare pin in every lane, and the index travels
+          # beside it where the gate can require it to be empty.
+          case "$lane" in
+            testpypi)
+              echo "pip_index_url=https://test.pypi.org/simple/" >> "$GITHUB_OUTPUT"
+              echo "pip_extra_index_url=https://pypi.org/simple/" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "pip_index_url=" >> "$GITHUB_OUTPUT"
+              echo "pip_extra_index_url=" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
           echo "Both images will be tagged: $tag"
           echo "frisian-mcp spec: $spec"
 
@@ -170,14 +213,35 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      - name: Guard — the Test PyPI lane must actually be wired
+        if: needs.resolve.outputs.lane == 'testpypi'
+        run: |
+          set -euo pipefail
+          # Docker IGNORES a build-arg the Dockerfile does not declare, and only
+          # warns. Without this check, a Test PyPI build would silently install
+          # from real PyPI and report success — a pre-release lane that
+          # validated the wrong artifact, which is worse than not having one.
+          for a in PIP_INDEX_URL PIP_EXTRA_INDEX_URL; do
+            grep -qE "^ARG[[:space:]]+$a" nautobot/Dockerfile || {
+              echo "::error::nautobot/Dockerfile does not declare 'ARG $a'."
+              echo "The build-arg would be ignored and this lane would quietly build"
+              echo "from real PyPI while claiming to validate the Test PyPI artifact."
+              exit 1
+            }
+          done
+
       - name: Build both images, amd64 only, loaded locally
         env:
           DEMO_TAG: ${{ needs.resolve.outputs.demo_tag }}
           SPEC: ${{ needs.resolve.outputs.spec }}
+          IDX: ${{ needs.resolve.outputs.pip_index_url }}
+          XIDX: ${{ needs.resolve.outputs.pip_extra_index_url }}
         run: |
           set -euo pipefail
           docker buildx build --load --platform linux/amd64 \
             --build-arg "FRISIAN_MCP_SPEC=${SPEC}" \
+            --build-arg "PIP_INDEX_URL=${IDX}" \
+            --build-arg "PIP_EXTRA_INDEX_URL=${XIDX}" \
             -t "${APP_IMAGE}:${DEMO_TAG}" -f nautobot/Dockerfile nautobot/
           docker buildx build --load --platform linux/amd64 \
             -t "${DB_IMAGE}:${DEMO_TAG}" -f nautobot/db/Dockerfile nautobot/
@@ -243,8 +307,33 @@ jobs:
       - name: GATE — the published image must be built on a released, hardened frisian-mcp
         env:
           SPEC: ${{ needs.resolve.outputs.spec }}
+        env:
+          LANE: ${{ needs.resolve.outputs.lane }}
+          IDX: ${{ needs.resolve.outputs.pip_index_url }}
+          XIDX: ${{ needs.resolve.outputs.pip_extra_index_url }}
         run: |
           set -euo pipefail
+
+          # 0. Only the release lane may publish.
+          #
+          #    rehearsal builds from local source; testpypi builds from an index
+          #    that is explicitly NON-DURABLE — files can be deleted and it
+          #    prunes. Either is fine for validating our own work and neither is
+          #    fine underneath someone else's `docker pull`, where the image
+          #    outlives the index it was built from.
+          if [ "$LANE" != "release" ]; then
+            echo "::error::lane is '$LANE'. Only 'release' may publish to GHCR."
+            echo "rehearsal = local source; testpypi = non-durable index. Neither ships."
+            exit 1
+          fi
+
+          # 0b. Belt and braces: the release lane sets no index override, so a
+          #     non-empty one here means the lane and the index disagree.
+          if [ -n "${IDX:-}" ] || [ -n "${XIDX:-}" ]; then
+            echo "::error::A pip index override is set on the release lane (index='${IDX:-}' extra='${XIDX:-}')."
+            echo "A published image must resolve from real PyPI only."
+            exit 1
+          fi
 
           # 1. It must be a PyPI version pin. This is what makes the rehearsal
           #    lane structurally unable to reach GHCR: a local path, an
@@ -319,6 +408,8 @@ jobs:
           build-args: |
             FRISIAN_MCP_SPEC=${{ needs.resolve.outputs.spec }}
             DEMO_TAG=${{ needs.resolve.outputs.demo_tag }}
+            PIP_INDEX_URL=
+            PIP_EXTRA_INDEX_URL=
           provenance: true
           sbom: true
 
