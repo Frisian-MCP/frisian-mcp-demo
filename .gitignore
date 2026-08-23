@@ -29,3 +29,6 @@ Thumbs.db
 *~
 .idea/
 .vscode/
+
+# Local rehearsal wheels are a build input, never a repo artifact.
+nautobot/wheels/*.whl

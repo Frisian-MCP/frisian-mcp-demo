@@ -73,10 +73,25 @@ ARG NAUTOBOT_VERSION=3.2.3
 # Unset must FAIL THE BUILD, never pick a version. The guard is below.
 #
 # FLOOR: a frisian-mcp release containing H3 + H9 (the permission-aware and
-# tier lenses on the unknown-tool error path). That is NOT satisfied by 1.1.0
-# — `main` carries the 1.1.0 version string without those fixes, so a 1.1.0
-# pin would rehearse a fixed build and publish a leaky one. No such release
-# exists yet, which is why this correctly fails closed today.
+# tier lenses on the unknown-tool error path).
+#
+# CORRECTED 2026-08-23. This comment previously said 1.1.0 does not satisfy the
+# floor because `main` carried the version string without the fixes. That was
+# true when written and is now false: the hardening MR landed, `origin/main` is
+# 09ab4f7 at version 1.1.0, and `git diff --stat <hardening-branch> origin/main
+# -- src/` is EMPTY. C3 lowered the publish floor to 1.1.0 on that evidence and
+# C3 is right.
+#
+# ⚠️ But the other half still holds, and it is the reason the local lane below
+# exists: **1.1.0 is not published.** PyPI's newest frisian-mcp is 1.0.12, Test
+# PyPI's is also 1.0.12, and there is no v1.1.0 tag. A pin resolves against an
+# index, not against a git branch — so today there is NO PyPI spec that both
+# passes the floor and installs. That is why an unset spec must keep failing
+# closed, and why FRISIAN_MCP_LOCAL_WHEEL is currently the only lane that can
+# produce an image carrying the controls this demo demonstrates.
+#
+# Do not "simplify" this into "1.1.0 is fine now". The git tree and the index
+# are different claims and this file depends on the second one.
 ARG FRISIAN_MCP_SPEC
 
 # Wheel-only tripwire. Measured at N2: the full stack resolves to 33 packages
@@ -99,6 +114,20 @@ ARG FRISIAN_MCP_SPEC
 # from the requirement specifier: FRISIAN_MCP_SPEC stays a bare version pin in
 # every lane, so the publish gate can go on rejecting specs that smuggle index
 # flags. Do not merge these into that variable.
+# ─── REHEARSAL LANE: install frisian-mcp from a locally built wheel ─────────
+# Visibly distinct from the PyPI path, and NOT the default. Drop a wheel in
+# nautobot/wheels/ and name the file here. See wheels/README.md.
+#
+# This lane cannot reach the publish job: the publish gate requires
+# FRISIAN_MCP_SPEC to be a bare PyPI version pin, and this lane leaves it
+# EMPTY. Nothing here widens that gate — a local build simply fails the gate's
+# precondition rather than needing a new exception.
+#
+# The build-time content assertion below applies to this lane too, and matters
+# MORE here: a locally built wheel has no index behind it, so its version
+# string is worth even less as evidence than a published one.
+ARG FRISIAN_MCP_LOCAL_WHEEL=
+
 ARG PIP_INDEX_URL=
 ARG PIP_EXTRA_INDEX_URL=
 
@@ -130,19 +159,35 @@ USER root
 # Fail closed on an unset pin, with a diagnosis rather than a pip usage error.
 # An empty ARG would otherwise reach pip as an empty argument and fail with
 # something that does not say why.
-RUN test -n "${FRISIAN_MCP_SPEC}" || { \
-      echo "ERROR: build-arg FRISIAN_MCP_SPEC is required and has no default (S-6)."; \
-      echo "       Pass an explicit pin, e.g.:"; \
-      echo "         --build-arg FRISIAN_MCP_SPEC='frisian-mcp[usage]==<version>'"; \
-      echo "       The version MUST contain H3 + H9. 1.0.12 and 1.1.0 do NOT."; \
+# Exactly ONE lane must be selected. Unset both and the build fails closed
+# (S-6); set both and it fails as ambiguous rather than silently preferring one
+# — a build that quietly picks a lane is how the shipping image came to be
+# unreproducible in the first place.
+RUN set -e; \
+    if [ -n "${FRISIAN_MCP_SPEC}" ] && [ -n "${FRISIAN_MCP_LOCAL_WHEEL}" ]; then \
+      echo "ERROR: FRISIAN_MCP_SPEC and FRISIAN_MCP_LOCAL_WHEEL are both set."; \
+      echo "       Pick one lane. PyPI pin, or local wheel. Not both."; \
       exit 1; \
-    }
+    fi; \
+    if [ -z "${FRISIAN_MCP_SPEC}" ] && [ -z "${FRISIAN_MCP_LOCAL_WHEEL}" ]; then \
+      echo "ERROR: no frisian-mcp source selected, and there is no default (S-6)."; \
+      echo "  PyPI lane:  --build-arg FRISIAN_MCP_SPEC='frisian-mcp[usage]==<version>'"; \
+      echo "  Local lane: --build-arg FRISIAN_MCP_LOCAL_WHEEL=<file in nautobot/wheels/>"; \
+      echo "  The version MUST contain H3 + H9. 1.0.12 does NOT."; \
+      echo "  1.1.0 does, but is NOT on PyPI - use the local lane today."; \
+      exit 1; \
+    fi
+
+# The wheels directory is always present (it carries a README and .gitkeep) so
+# this COPY cannot fail on a clean clone. *.whl is gitignored: a wheel is a
+# build input, never a repo artifact.
+COPY wheels/ /tmp/wheels/
 
 RUN pip install --no-cache-dir ${PIP_ONLY_BINARY:+--only-binary=${PIP_ONLY_BINARY}} \
       ${PIP_INDEX_URL:+--index-url=${PIP_INDEX_URL}} \
       ${PIP_EXTRA_INDEX_URL:+--extra-index-url=${PIP_EXTRA_INDEX_URL}} \
       "nautobot==${NAUTOBOT_VERSION}" \
-      "${FRISIAN_MCP_SPEC}" \
+      "${FRISIAN_MCP_SPEC:-/tmp/wheels/${FRISIAN_MCP_LOCAL_WHEEL}}" \
       "nautobot-golden-config==${GOLDEN_CONFIG_VERSION}" \
       "nautobot-dns-models==${DNS_MODELS_VERSION}" \
       "nautobot-bgp-models==${BGP_MODELS_VERSION}" \
@@ -171,9 +216,28 @@ for dist, want in expected.items():
     if got != want:
         bad.append(f"{dist}: expected {want}, got {got}")
 
-# frisian-mcp is specifier-driven, so assert presence and importability only.
+# frisian-mcp is lane-driven, so assert presence and importability...
 print(f"{'frisian-mcp':24} {md.version('frisian-mcp')}")
-importlib.import_module("frisian_mcp")
+fm = importlib.import_module("frisian_mcp")
+
+# ...and then assert CONTENT, because a version string is not evidence.
+# `origin/main` carried "1.1.0" for a while WITHOUT the hardening, and a local
+# wheel has no index behind it at all — so the only honest check is whether the
+# code that implements H3 and H9 is actually in the installed package.
+import pathlib
+root = pathlib.Path(fm.__file__).parent
+blob = "\n".join(
+    p.read_text(errors="ignore") for p in root.rglob("*.py")
+)
+absent = [m for m in ("_caller_rank", "entry_is_visible") if m not in blob]
+if absent:
+    bad.append(
+        "frisian-mcp is missing the H3/H9 markers " + ", ".join(absent)
+        + " - this wheel does NOT carry the permission-aware and tier lenses "
+          "on the unknown-tool error path"
+    )
+else:
+    print(f"{'H3/H9 markers':24} present (_caller_rank, entry_is_visible)")
 
 if bad:
     sys.exit("PIN DRIFT:\n  " + "\n  ".join(bad))
