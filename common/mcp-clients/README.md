@@ -42,8 +42,14 @@ Connect **one identity at a time** when demonstrating permission-aware
 discovery, so the only thing that changes between two observations is the
 identity.
 
-Static bearer tokens are the supported path for this demo. The browser-based
-OAuth connect flow is not available in this image; see the host README for why.
+Static bearer tokens are the supported path for all three tiers, and are what
+these snippets use.
+
+A browser-based OAuth connect is also available, against a pre-registered
+client that is published like everything else here. It lands at the `read`
+tier — self-serve gets you read, while read-write and admin stay with the
+provisioned tokens above. See the host README for the client ID, the registered
+redirect URIs, and the approval step.
 
 ## Smoke tests
 

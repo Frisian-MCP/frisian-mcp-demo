@@ -89,6 +89,19 @@ ARG FRISIAN_MCP_SPEC
 # Defaulted ON rather than set only in CI, so a local build and a CI build
 # fail the same way. To unblock a build deliberately, pass an empty value:
 #     docker build --build-arg PIP_ONLY_BINARY= ...
+# Test PyPI lane (C3). Declared here because Docker SILENTLY IGNORES an
+# undeclared build-arg and only warns — so a testpypi build against a
+# Dockerfile without these would install from real PyPI and report success.
+# A pre-release lane that validates the wrong artifact is worse than no lane.
+# The workflow greps for both ARGs and fails closed if either is missing.
+#
+# Empty in the release lane, which is what keeps the index a separate axis
+# from the requirement specifier: FRISIAN_MCP_SPEC stays a bare version pin in
+# every lane, so the publish gate can go on rejecting specs that smuggle index
+# flags. Do not merge these into that variable.
+ARG PIP_INDEX_URL=
+ARG PIP_EXTRA_INDEX_URL=
+
 ARG PIP_ONLY_BINARY=:all:
 
 ARG GOLDEN_CONFIG_VERSION=3.0.7
@@ -126,6 +139,8 @@ RUN test -n "${FRISIAN_MCP_SPEC}" || { \
     }
 
 RUN pip install --no-cache-dir ${PIP_ONLY_BINARY:+--only-binary=${PIP_ONLY_BINARY}} \
+      ${PIP_INDEX_URL:+--index-url=${PIP_INDEX_URL}} \
+      ${PIP_EXTRA_INDEX_URL:+--extra-index-url=${PIP_EXTRA_INDEX_URL}} \
       "nautobot==${NAUTOBOT_VERSION}" \
       "${FRISIAN_MCP_SPEC}" \
       "nautobot-golden-config==${GOLDEN_CONFIG_VERSION}" \

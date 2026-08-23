@@ -292,22 +292,80 @@ changes between two `help` calls is the identity and nothing else.
 
 ### OAuth
 
-Static bearer tokens are the supported path for this demo and are what the
-shipped client configurations use.
+There are two ways in, and which one you use determines how much you get.
 
-The server does advertise its OAuth metadata, so a spec-compliant client that
-receives a `401` can discover where the authorization server lives rather than
-dead-ending on a guessed URL. But every client-minting path is deliberately
-closed in this image — open registration, PKCE auto-registration, and automatic
-approval are all off — so a browser-based connect flow has nothing to register
-with today.
+**Self-serve OAuth gets you `read`.** The read-write and admin surfaces are
+reached only with the provisioned static tokens above. That is the scoping
+lesson rather than a shortcoming: a client that walks up and asks for access
+lands at the floor, and wider authority is something an operator hands out.
 
-> The browser-connect path is not documented here yet, deliberately. It is an
-> open item with @security and @PM; a pre-registered client has not landed in
-> the provisioning script. Use a static token until this section says otherwise.
+#### Static tokens
 
-Access tokens issued by an OAuth flow are never baked into an image: they
-expire, and a baked one would be dead on arrival.
+The supported path for all three tiers, and what the shipped client
+configurations use. Paste a block from
+[`../common/mcp-clients/nautobot.mcp.json.template`](../common/mcp-clients/nautobot.mcp.json.template)
+and connect.
+
+#### Browser-based connect
+
+One OAuth client is pre-registered. Its ID and secret are published, like
+everything else here:
+
+```text
+client_id      frisian-demo-public-client-id
+client_secret  frisian-demo-public-client-secret-do-not-reuse
+```
+
+Registered redirect URIs:
+
+```text
+https://claude.ai/api/mcp/auth_callback
+http://localhost:8080/oauth/callback
+http://127.0.0.1:8080/oauth/callback
+```
+
+A spec-compliant client that receives a `401` follows the standard discovery
+cascade to find the authorization server, so it does not have to guess:
+
+```console
+$ curl -s http://localhost:8080/.well-known/oauth-authorization-server
+{"authorization_endpoint": "http://localhost:8080/oauth/authorize/", ...}
+```
+
+An approval screen always renders before anything is issued — automatic
+approval is off, so consent cannot be skipped or replayed from a stored
+decision:
+
+```console
+$ curl -s -o /dev/null -w '%{http_code}\n' \
+    'http://localhost:8080/oauth/authorize/?client_id=frisian-demo-public-client-id&...'
+200      # "An application is requesting access to this MCP server."  Allow / Deny
+```
+
+Both halves of that check refuse properly:
+
+```text
+unknown client_id                        400  {"error": "invalid_client"}
+known client, unregistered redirect_uri  400  {"error": "invalid_redirect_uri"}
+```
+
+There is no separate login step: approving grants a token that acts as the
+`demo-readonly` identity, at the `read` tier. The client is also restricted to
+the authorization-code grant, so its published ID and secret cannot be replayed
+as a service-to-service credential to obtain a token with no approval screen in
+the way.
+
+Use `localhost` rather than `127.0.0.1` for the OAuth endpoints; that is the
+issuer the server advertises, and the two are not interchangeable to a client
+matching redirect URIs.
+
+> Whether a given third-party connector uses the exact callback URL registered
+> above is not something this repository can verify. The server side is correct
+> and both controls refuse properly. If a connect attempt fails on the redirect,
+> the registered URI list is the place to look.
+
+No access token is ever baked into an image. They expire, so a baked one would
+be dead on arrival.
 
 ## Image pinning
 
