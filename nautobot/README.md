@@ -82,11 +82,10 @@ intentionally not healthy and the application waits behind the compose
 healthcheck. The healthcheck allows up to 15 minutes before it gives up, so a
 wait of several minutes is inside the expected envelope.
 
-> No measured restore time is published here yet. The figure comes from
-> @release-engineering measuring the real image pair once the golden artifact
-> exists, and an optimistic number in this section would cause the exact
-> failure the section exists to prevent — a user reading a normal wait as a
-> hang because the documentation told them it should already be over.
+> No measured restore time is published here yet, on purpose. An optimistic
+> figure would cause the exact failure this section exists to prevent — a user
+> reading a normal wait as a hang, because the documentation told them it
+> should already be over.
 
 The demo's change log starts empty on purpose. The object-change history from
 building this estate is truncated before the public image is baked, because it
