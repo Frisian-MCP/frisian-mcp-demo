@@ -54,6 +54,13 @@ x-app-env: &app_env
   NAUTOBOT_DB_PASSWORD: "${NAUTOBOT_DB_PASSWORD:-nautobot}"
   NAUTOBOT_DB_TIMEOUT: "${NAUTOBOT_DB_TIMEOUT:-300}"
 
+  # W016: heavy-response continuation entries go to their own bounded Redis
+  # instance, NOT the default cache that holds OAuth authorization codes and
+  # the token-endpoint rate counter. The config half (defining the CACHES
+  # alias) is in nautobot_config.py; this is the compose half.
+  FRISIAN_MCP_HEAVY_CACHE_ALIAS: "${FRISIAN_MCP_HEAVY_CACHE_ALIAS:-heavy}"
+  FRISIAN_MCP_HEAVY_CACHE_URL: "redis://:${REDIS_PASSWORD:-nautobot}@redis-heavy:6379/0"
+
   NAUTOBOT_REDIS_HOST: "${NAUTOBOT_REDIS_HOST:-redis}"
   NAUTOBOT_REDIS_PORT: "${NAUTOBOT_REDIS_PORT:-6379}"
   NAUTOBOT_REDIS_PASSWORD: "${NAUTOBOT_REDIS_PASSWORD:-nautobot}"
@@ -77,6 +84,8 @@ services:
         # is deliberately unhealthy for the whole restore — see `db`.
         condition: service_healthy
       redis:
+        condition: service_healthy
+      redis-heavy:
         condition: service_healthy
     environment: *app_env
     ports:
@@ -110,8 +119,23 @@ services:
     image: "ghcr.io/frisian-mcp/demo-nautobot-db:${DEMO_TAG:-v0.1.0}"
     restart: unless-stopped
     environment: *db_env
-    volumes:
-      - pgdata:/var/lib/postgresql/data
+    # NO NAMED VOLUME FOR PGDATA. Deliberate, and it is the guarantee.
+    #
+    # `/docker-entrypoint-initdb.d/` runs only when PGDATA is empty. Persist it
+    # and a newer DEMO_TAG does NOT restore its dump: the user gets the new
+    # application image on top of the old database. That is not a read-side
+    # wrongness either — the app entrypoint runs `post_upgrade` (i.e. migrate)
+    # on every start, so the stale database is actively MIGRATED IN PLACE on
+    # the user's machine, unprompted.
+    #
+    # With no volume, PGDATA is empty every boot, initdb.d always fires, and
+    # the database is always the one the app image was built for. The lockstep
+    # guarantee becomes true by construction rather than by a check that can be
+    # raced or edited away.
+    #
+    # The cost is the restore on every start. For a demo whose estate is the
+    # product and where nobody's poking is precious, that is the right trade.
+    # Do not "fix" this by adding a volume back.
     healthcheck:
       # TCP, not the unix socket, and this is load-bearing.
       #
@@ -125,8 +149,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 60
-      # Generous: first boot restores the full demo estate. Later boots are
-      # instant because pgdata persists.
+      # Generous: EVERY boot restores the full demo estate, because PGDATA is
+      # intentionally not persisted (see above). Measured clean boot to healthy
+      # for the whole stack is ~140s.
       start_period: 15m
 
   # ── Redis (cache + celery broker) ────────────────────────────────────────
@@ -137,6 +162,49 @@ services:
       - sh
       - -c
       - redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-nautobot}"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -h localhost -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis for heavy-response continuation entries (W016) ─────────────────
+  redis-heavy:
+    # A SECOND INSTANCE, not a second logical DB on `redis`.
+    #
+    # frisian-mcp raises W016 at startup when heavy-response continuation
+    # entries share the `default` cache with OAuth authorization codes and the
+    # token-endpoint rate counter: entry churn can evict the auth codes, and
+    # the rate limiter fails OPEN when its cache is unavailable.
+    #
+    # A separate logical DB does NOT close it — DBs share the instance's
+    # memory budget, so eviction pressure crosses between them. This is a
+    # separate instance with its own bounded budget, which is what the check
+    # actually asks for.
+    #
+    # The locked posture means an anonymous caller cannot reach MCP at all, so
+    # the outside-reachable half of W016's threat model does not apply here.
+    # It is still wired properly rather than reasoned away: this config gets
+    # copied, and a demo that boots with a security warning teaches the wrong
+    # thing.
+    #
+    # redis:7 here while `redis` above is still on 6 (EOL upstream). Bumping
+    # the broker is a separate, testable change against a running stack; a new
+    # service starting on a supported version is not.
+    image: "redis:7-alpine"
+    restart: unless-stopped
+    command:
+      - sh
+      - -c
+      # Bounded and evicting. Without maxmemory this instance can consume the
+      # host, which is the failure W016 is pointing at.
+      - >-
+        redis-server --requirepass "$$REDIS_PASSWORD"
+        --maxmemory ${DEMO_HEAVY_CACHE_MAXMEMORY:-128mb}
+        --maxmemory-policy allkeys-lru
+        --save ""
     environment:
       REDIS_PASSWORD: "${REDIS_PASSWORD:-nautobot}"
     healthcheck:
@@ -159,6 +227,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      redis-heavy:
+        condition: service_healthy
     environment: *app_env
     volumes:
       - media_root:/opt/nautobot/media
@@ -180,6 +250,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      redis-heavy:
+        condition: service_healthy
     environment: *app_env
     volumes:
       - demo_state:/opt/nautobot/demo-state
@@ -189,5 +261,6 @@ services:
 
 volumes:
   media_root:
-  pgdata:
   demo_state:
+  # No pgdata volume. See the note on the `db` service — persisting it breaks
+  # the lockstep guarantee and lets a stale database be migrated in place.

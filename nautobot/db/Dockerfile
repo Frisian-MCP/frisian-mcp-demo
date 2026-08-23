@@ -17,9 +17,15 @@
 # Pinned major, measured rather than assumed. Nautobot 3.2.3 sets a 14.0 floor
 # and states no ceiling, but the application image ships libpq 17 — that is the
 # real ceiling. 17 sits at the top of the supported window and is
-# version-matched to the pg_dump that produces the archive and to the client in
-# the app image. Must stay in step with POSTGRES_MAJOR in
-# .github/workflows/build-nautobot.yml, which carries a drift guard.
+# version-matched to the client in the app image.
+#
+# ⚠️ PIN THE MAJOR ONLY. The effective requirement is postgres >= 17.6.
+#
+# Pinning a specific minor looks more careful and is the likely "improvement"
+# someone makes here. It is not safe below 17.6, and 17.4 — which is what
+# Homebrew ships today, so it is the number nearest to hand — breaks every
+# restore. `postgres:17` tracks the latest 17.x and satisfies the floor; a
+# narrower pin has to be checked against it deliberately, not guessed.
 ARG POSTGRES_MAJOR=17
 FROM postgres:${POSTGRES_MAJOR}
 
@@ -46,4 +52,10 @@ LABEL org.frisian.demo.postgres-major="${POSTGRES_MAJOR}"
 # specifically, only when PGDATA is empty. A host that persists PGDATA in a
 # named volume therefore will NOT restore a newer dump on upgrade. See the
 # database-volume note in common/docs/HOST-CONTRACT.md.
+# Runs BEFORE the dump (filename order) and hard-fails on a role mismatch.
+# The dump carries 272 `ALTER TABLE ... OWNER TO nautobot;` statements, so
+# POSTGRES_USER is a hard requirement rather than a naming convention — and it
+# is the sort of value that looks safe to change.
+COPY db/00-assert-role.sh /docker-entrypoint-initdb.d/00-assert-role.sh
+
 COPY db/demo.sql.gz /docker-entrypoint-initdb.d/demo.sql.gz

@@ -40,6 +40,7 @@ CI workflows, the docs and the quickstart all address them by path.
 | `<host>/Dockerfile` | Application image. `FROM` a published upstream image | yes |
 | `<host>/config/` | Configuration files copied into the application image | yes |
 | `<host>/db/Dockerfile` | Pre-seeded database image | yes |
+| `<host>/db/00-assert-role.sh` | Fails the boot on a mismatched database role | yes |
 | `<host>/db/demo.sql.gz` | The golden dump | **no — injected by CI** |
 
 ### Why `.env` is committed
@@ -174,16 +175,33 @@ Two constraints on the pinned major:
 If those two ranges do not overlap, the dump has to be re-cut with a matching
 client — not worked around in the image.
 
-### Known gap: the database volume defeats the lockstep guarantee
+### Do not persist `PGDATA`. Ruled, and it is the guarantee.
 
 `/docker-entrypoint-initdb.d/` scripts run **only when `PGDATA` is empty**. A
-host that persists the database in a named volume therefore will not restore a
-newer dump on upgrade: the user pulls a new `DEMO_TAG`, gets the new
-application image, and keeps the old database. The tag moved and the data did
-not — exactly the mixed state the single-variable pin exists to prevent.
+host that persists the database in a named volume will not restore a newer
+dump on upgrade: the user pulls a new `DEMO_TAG`, gets the new application
+image, and keeps the old database.
 
-**This is unresolved.** It is tracked in the build room; do not assume the
-current behaviour in a new host is the settled answer.
+That is not merely a stale read. The application entrypoint runs
+`post_upgrade` — i.e. `migrate` — on every start, so the new image **actively
+migrates the stale database in place**, on the user's machine, unprompted.
+
+So no host mounts a volume at `PGDATA`. Empty every boot, `initdb.d` always
+fires, and the database is always the one the application image was built for.
+The lockstep guarantee becomes true **by construction** rather than by a check
+that can be raced or edited away.
+
+The cost is a restore on every start. For a demo whose estate is the product
+and where nobody's local poking is precious, that is the right trade. Adding
+the volume back is the obvious "fix" and it is the thing not to do.
+
+### The database role is asserted, not assumed
+
+The dump assigns ownership to a specific role, and the entrypoint restores with
+`ON_ERROR_STOP` — so a mismatched `POSTGRES_USER` is a **fatal, partial**
+restore, not a warning. Ship a `00-assert-role.sh` in `initdb.d` that sorts
+ahead of the dump and fails loudly. `POSTGRES_USER` looks like a naming
+convention, which is exactly why it needs the assertion.
 
 ---
 
@@ -212,7 +230,8 @@ vendoring it. That requirement is usually a sign the base image is wrong.
 4. `db/Dockerfile` — `FROM postgres:<pinned>` + `COPY demo.sql.gz`.
 5. `docker-compose.yml` — services named per the table above; both images from
    `${DEMO_TAG}`; ports bound to `${DEMO_BIND_HOST:-127.0.0.1}`; no
-   `env_file:`; real healthcheck-based `depends_on`, never a sleep.
+   `env_file:`; **no volume at `PGDATA`**; real healthcheck-based
+   `depends_on`, never a sleep.
 6. `docker-compose.build.yml` — build inputs only. It must not restate ports,
    volumes or environment.
 7. `.env` + `.env.example`.
