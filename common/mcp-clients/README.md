@@ -72,17 +72,25 @@ ROUTE="mcp/read-only" \
 ./curl-tools-list.sh
 ```
 
-Both scoped doors return **12 tools with identical names** for every identity.
-That is correct: the scoped doors publish one dispatcher per resource group,
-and the group list is a property of the route, not of the caller.
+Both scoped doors return **12 tools with identical names** for `demo-readonly`
+and `demo-netops` — but not because the group list belongs to the route.
 
-**So do not use `tools/list` lengths to demonstrate scoping on those doors** — a
-reader who compares 12 against 12 will conclude nothing is happening. Use
-`help` below.
+Two filters run in series: the route's allow-list fixes the **candidate set**,
+and permission-aware discovery then filters **within** it, per identity. On
+these doors the allow-list has already removed nearly everything those two
+identities differ on, so the second filter has little left to do. Ask the same
+door as `demo-admin` and it returns **13** — the extra group is
+`load_balancers`, which is on the allow-list and therefore mounted for
+everyone, but hidden from `tools/list` for identities that cannot use it.
 
-The `/mcp/admin/` door applies no route carve, so counts there *do* vary by
-identity: 23, 38, and 47 tools for `demo-readonly`, `demo-netops`, and
-`demo-admin` respectively, all against the same URL.
+**So do not use `tools/list` lengths to demonstrate scoping on these doors** — a
+reader who compares 12 against 12 concludes nothing is happening, and a reader
+who compares 12 against 13 draws the wrong lesson from a single group. Use
+`help` below, where the per-identity difference is plain.
+
+The `/mcp/admin/` door carves nothing, so no candidate set is narrowed first and
+the spread is obvious: 23, 38, and 47 tools for `demo-readonly`, `demo-netops`,
+and `demo-admin`, all against the same URL.
 
 ### `help` — the action surface, and the real demonstration
 
