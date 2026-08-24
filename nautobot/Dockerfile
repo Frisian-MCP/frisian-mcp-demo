@@ -50,11 +50,24 @@ ARG NAUTOBOT_VERSION=3.2.3
 #   frisian-mcp==1.0.12          — latest PUBLISHED release (2026-06-17)
 #   frisian-mcp[usage]==1.1.0    — once 1.1.0 is on PyPI
 #
-# The `usage` extra pulls tiktoken for real cl100k_base token counts. It
-# exists only in the unreleased 1.1.0 tree — no published wheel provides it,
-# and `pip install frisian-mcp[usage]==1.0.12` would emit a warning and
-# silently install the base package. Until 1.1.0 ships, the `_usage` block
-# degrades to the character-based approximation (encoding "approx-char4").
+# The `usage` extra pulls tiktoken for real cl100k_base token counts, and it
+# is REQUIRED — asserted by the encoding check further down (N8). Without it
+# the `_usage` block degrades SILENTLY to the character-based approximation
+# (encoding "approx-char4"). This demo's subject includes token economy, so
+# that is the one degradation a viewer might specifically notice.
+#
+# On the PyPI lane the extra rides in THIS specifier, so write it in:
+#     frisian-mcp[usage]==1.1.0     ✅
+#     frisian-mcp==1.1.0            ❌ installs, then fails the encoding check
+#
+# No publish-gate change is needed: the gate already matches
+# `frisian-mcp(\[extras\])?==X.Y.Z`, so it permits the extra — but it only
+# PERMITS it. Nothing in the gate requires it, which is why the check below
+# is on the built artifact rather than on this string.
+#
+# The extra does not exist before 1.1.0: `frisian-mcp[usage]==1.0.12` would
+# warn and silently install the base package. Moot here — 1.0.12 fails the
+# H3/H9 floor anyway.
 #
 # ⚠️ NO DEFAULT, DELIBERATELY. DO NOT ADD ONE BACK. (S-6)
 #
@@ -187,7 +200,7 @@ RUN pip install --no-cache-dir ${PIP_ONLY_BINARY:+--only-binary=${PIP_ONLY_BINAR
       ${PIP_INDEX_URL:+--index-url=${PIP_INDEX_URL}} \
       ${PIP_EXTRA_INDEX_URL:+--extra-index-url=${PIP_EXTRA_INDEX_URL}} \
       "nautobot==${NAUTOBOT_VERSION}" \
-      "${FRISIAN_MCP_SPEC:-/tmp/wheels/${FRISIAN_MCP_LOCAL_WHEEL}}" \
+      "${FRISIAN_MCP_SPEC:-/tmp/wheels/${FRISIAN_MCP_LOCAL_WHEEL}[usage]}" \
       "nautobot-golden-config==${GOLDEN_CONFIG_VERSION}" \
       "nautobot-dns-models==${DNS_MODELS_VERSION}" \
       "nautobot-bgp-models==${BGP_MODELS_VERSION}" \
@@ -221,9 +234,16 @@ print(f"{'frisian-mcp':24} {md.version('frisian-mcp')}")
 fm = importlib.import_module("frisian_mcp")
 
 # ...and then assert CONTENT, because a version string is not evidence.
-# `origin/main` carried "1.1.0" for a while WITHOUT the hardening, and a local
+# origin/main carried "1.1.0" for a while WITHOUT the hardening, and a local
 # wheel has no index behind it at all — so the only honest check is whether the
 # code that implements H3 and H9 is actually in the installed package.
+#
+# NOTE: this heredoc is <<PY, NOT <<'PY', because the expected{} dict below
+# needs the ARGs expanded. That means the SHELL reads this body first, so a
+# backtick here is command substitution and a bare $ is a variable. Keep
+# backticks out of these comments — one slipped in around origin/main and the
+# build was quietly running it as a command, printing "not found" on every
+# build (N8). Writing this very warning with backticks reintroduced it once.
 import pathlib
 root = pathlib.Path(fm.__file__).parent
 blob = "\n".join(
@@ -270,17 +290,62 @@ RUN mkdir -p /opt/nautobot/media /opt/nautobot/demo-state \
 # broken on an air-gapped or offline machine. Warming here removes the runtime
 # egress dependency entirely.
 #
-# Skipped cleanly when the `usage` extra is absent (see FRISIAN_MCP_SPEC). If
-# tiktoken IS installed and the warm fails, the build fails — a silently cold
-# cache is exactly the failure this layer exists to prevent.
+# ⚠️ There is deliberately NO "tiktoken absent" branch any more. This layer
+# used to skip cleanly with a printed note, and that is precisely how the
+# image came within one row of being published with token counting in its
+# APPROXIMATE path — the skip was working exactly as written, and nobody saw
+# it until the build log was read (N8). A skip is now a build failure.
+#
+# The check is on `encoding_name()` rather than on tiktoken being importable,
+# for the same reason the H3/H9 assertion above checks content instead of a
+# version string: it is the exact function that populates the `encoding` field
+# of the `_usage` block. An importable tiktoken whose encoding fails to load
+# reports "approx-char4" just as quietly as no tiktoken at all, because
+# `_load_encoder()` swallows every failure by design — correct at runtime,
+# and useless as a build signal unless something asserts the result.
+#
+# It is also what makes the extra apply to BOTH lanes. The local lane appends
+# [usage] to the wheel path, but the PyPI lane depends on whoever writes
+# FRISIAN_MCP_SPEC remembering it, and the publish gate permits the extra
+# without requiring it. Only an outcome check covers both lanes, and it holds
+# regardless of how the extra arrived.
+#
+# `frisian_mcp.usage.counter` is imported directly rather than via the
+# `frisian_mcp.usage` package, whose __init__ pulls in resolver -> django.conf.
+# counter is the Django-free leaf, so this needs no configured settings.
 ENV TIKTOKEN_CACHE_DIR=/opt/nautobot/.tiktoken-cache
-RUN mkdir -p "${TIKTOKEN_CACHE_DIR}" \
-    && if python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('tiktoken') else 1)"; then \
-         python -c "import tiktoken; tiktoken.get_encoding('cl100k_base'); print('cl100k_base cached')"; \
-       else \
-         echo "tiktoken absent (no [usage] extra) - _usage degrades to approx-char4"; \
-       fi \
-    && chown -R nautobot:nautobot "${TIKTOKEN_CACHE_DIR}"
+RUN mkdir -p "${TIKTOKEN_CACHE_DIR}" && python - <<'PY' && chown -R nautobot:nautobot "${TIKTOKEN_CACHE_DIR}"
+import sys
+
+try:
+    import tiktoken
+except Exception as exc:  # noqa: BLE001
+    sys.exit(
+        f"NO TOKENIZER: tiktoken is not installed ({exc}).\n"
+        "  The [usage] extra did not reach pip, so _usage would report\n"
+        "  'approx-char4' instead of real cl100k_base token counts.\n"
+        "    PyPI lane:  FRISIAN_MCP_SPEC='frisian-mcp[usage]==<version>'\n"
+        "    Local lane: the install line appends [usage] to the wheel path -\n"
+        "                check the wheel declares 'Provides-Extra: usage'."
+    )
+
+# The network touch, done here so it never happens at runtime. Writes the BPE
+# ranks into TIKTOKEN_CACHE_DIR, which is set above and therefore in effect.
+tiktoken.get_encoding("cl100k_base")
+
+from frisian_mcp.usage.counter import encoding_name
+
+name = encoding_name()
+print(f"{'_usage encoding':24} {name}")
+if name != "cl100k_base":
+    sys.exit(
+        f"COLD TOKENIZER: _usage would report '{name}', not 'cl100k_base'.\n"
+        "  tiktoken imported but the pinned encoding did not load. This is\n"
+        "  the failure the warm exists to prevent: it degrades silently at\n"
+        "  runtime rather than failing here."
+    )
+print("token counting verified (real cl100k_base, cache warmed)")
+PY
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Demo configuration
