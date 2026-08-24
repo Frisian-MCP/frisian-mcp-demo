@@ -135,26 +135,58 @@ for img in "$APP_IMAGE" "$DB_IMAGE"; do
   echo "  ok  ${img}:${DEMO_TAG}  (amd64 + arm64)"
 done
 
+# Pin .env to the tag we just published.
+#
+# publish.sh is the ONLY thing that knows the -pre suffix; .env is TRACKED and
+# ships in every clone, so it is what a zero-flag `docker compose up` resolves.
+# Nothing pinned the two equal, and a dry run cannot catch the drift because it
+# never exercises clone -> up. Publishing v0.1.0-pre while every clone asks for
+# v0.1.0 breaks the 60-second quickstart on its first command, for both images.
+#
+# Writing it here means the commit that publishes is the commit that points at
+# what was published.
+for f in .env .env.example; do
+  [ -f "$f" ] || continue
+  if grep -q '^DEMO_TAG=' "$f"; then
+    tmp="$(mktemp)"
+    sed "s|^DEMO_TAG=.*|DEMO_TAG=${DEMO_TAG}|" "$f" > "$tmp" && mv "$tmp" "$f"
+    echo "  pinned ${f} -> DEMO_TAG=${DEMO_TAG}"
+  fi
+done
+
 cat <<EOS
 
 ── published ────────────────────────────────────────
   ${APP_IMAGE}:${DEMO_TAG}
   ${DB_IMAGE}:${DEMO_TAG}
 
-FIRST PUBLISH ONLY — two manual steps, and the demo is unusable without them:
+FIRST PUBLISH — the packages stay CLOSED. Two manual steps:
 
-  1. GHCR package visibility is NOT inherited from repository visibility, and
-     these are TWO SEPARATE packages with independent settings. Flip BOTH to
-     public at https://github.com/orgs/Frisian-MCP/packages
-     Missing the db package gives a demo that pulls the app and then fails on
-     the database with a confusing permissions error.
+  1. LEAVE BOTH PACKAGES PRIVATE. Do NOT flip them public.
+     Ruled 2026-08-24: closed until our own testing is done. GHCR visibility
+     is NOT inherited from repository visibility, and these are TWO SEPARATE
+     packages with independent settings — so confirm BOTH read Private at
+     https://github.com/orgs/Frisian-MCP/packages rather than assuming.
 
-  2. Verify LOGGED OUT, from a machine with no local cache:
+     Restrict WRITE to approved people. Visibility and write are SEPARATE
+     controls: a public package is already read-only to the world (there is
+     no anonymous push), so making it public later does not restrict writes
+     and never did. Check every write path, not just the obvious one:
+       - explicit package role assignments (read / write / admin)
+       - INHERITED repository access — repo write can become package write
+       - workflow GITHUB_TOKEN with `packages: write`
+       - PATs carrying `write:packages`
+
+  2. Verify LOGGED OUT — and while private the check is INVERTED:
        docker logout ghcr.io
-       docker pull ${APP_IMAGE}:${DEMO_TAG}
-       docker pull ${DB_IMAGE}:${DEMO_TAG}
-     Publishing from an account that can already pull private packages hides a
-     visibility mistake completely. This is the step people skip.
+       docker pull ${APP_IMAGE}:${DEMO_TAG}     # MUST FAIL
+       docker pull ${DB_IMAGE}:${DEMO_TAG}      # MUST FAIL
+     A private package an anonymous user CAN pull is the failure this policy
+     exists to prevent, and you would never see it from an authenticated
+     machine. Then pull as an approved account and confirm both succeed.
+
+  3. COMMIT the pinned .env — publish.sh just rewrote DEMO_TAG to match what
+     was published. Uncommitted, a fresh clone still asks for the old tag.
 
   Then, from a fresh clone:
        cd nautobot && DEMO_TAG=${DEMO_TAG} docker compose up
