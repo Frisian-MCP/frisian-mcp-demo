@@ -68,29 +68,27 @@ ROUTE="mcp/read-only" \
 
 Twelve tools come back. The walkthrough below is what makes that interesting.
 
-## First boot, and resetting
+## Every start is a fresh estate
 
-The database image restores its baked demo estate **when the database starts
-with no existing data**. In practice that means the first `docker compose up`,
-and any `up` after a `docker compose down`.
-
-It does **not** restore on `docker compose restart`, and it does not restore on
-an `up` that only changes `DEMO_TAG` while the containers are still present. In
-those cases the database keeps what is already there and logs:
-
-```text
-PostgreSQL Database directory appears to contain a database; Skipping initialization
-```
+The database image restores its baked demo estate **every time the database
+starts** — the first `docker compose up`, every `up` after that, and
+`docker compose restart` too.
 
 The practical consequence is the one to remember: **changes you make to the
-demo estate survive a restart.** That is convenient while you are exploring,
-and it means "I restarted it" is not how you get back to a clean estate.
+demo estate do not survive a restart.** Rename a device, then restart, and the
+original name is back. Nothing you do here is precious, which is the intended
+trade for a demo whose estate is the product.
 
-To return to the baked estate deliberately:
+That also means getting back to a clean estate needs no special command:
 
 ```bash
-docker compose down -v && docker compose up
+docker compose restart
 ```
+
+The database's data directory is a RAM disk rather than a volume, so there is
+no state for Docker to carry across a restart and the restore always runs. This
+is deliberate: it is what guarantees that a newer `DEMO_TAG` gets the database
+that matches it, rather than a new application image on top of an old database.
 
 The restore itself takes **about four seconds** — the demo estate is small.
 While it runs, the `db` service is intentionally not healthy and the
@@ -424,15 +422,10 @@ a matched pair — the database contains identities whose tokens are verified by
 a key the application image carries, so running two different tags is
 unsupported and fails in ways that look like broken authentication.
 
-**When you change `DEMO_TAG`, bring the stack down first:**
-
-```bash
-docker compose down -v && docker compose up
-```
-
-A plain `docker compose up` onto a new tag pulls the new images but keeps the
-existing database, so you would be running a new application image against the
-previous estate. Taking it down first is what makes the pair actually matched.
+Changing `DEMO_TAG` needs no special ceremony — `docker compose up` is enough.
+Because the database keeps nothing across a start, a new tag always brings up
+its own matching estate rather than a new application image on top of the
+previous one. That is the reason the data directory is a RAM disk.
 
 ## Environment
 
@@ -489,14 +482,12 @@ worse than a build error.
 ## Stop and reset
 
 ```bash
-docker compose restart   # restart in place — the estate is KEPT
+docker compose restart   # restart in place — the estate is RESTORED
 docker compose down      # stop and remove the containers
 docker compose down -v   # stop and discard local state as well
 ```
 
-Both `down` forms return the estate to its baked state on the next `up`.
-`restart` does not — it leaves the database exactly as you left it. See
-[First boot, and resetting](#first-boot-and-resetting).
-
-`-v` additionally discards the generated secret key, which invalidates existing
-browser sessions but not the demo tokens.
+All three return the estate to its baked state on the next start; the database
+keeps nothing across a restart by design. `down -v` additionally discards the
+generated secret key, which invalidates existing browser sessions but not the
+demo tokens. See [Every start is a fresh estate](#every-start-is-a-fresh-estate).

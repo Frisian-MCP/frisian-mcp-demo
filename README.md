@@ -33,9 +33,9 @@ docker compose up
 ```
 
 The stack is ready in about a minute once the images are downloaded. The demo
-database is restored on the first start, and again after a
-`docker compose down` — but **not** on a plain `restart`, so changes you make
-while exploring survive one. The host README covers resetting.
+estate is restored on **every** start, including `docker compose restart`, so
+changes you make while exploring do not survive one — and getting back to a
+clean estate never takes more than a restart.
 
 When the stack is healthy, point an MCP client at it using one of the published
 demo identities from
