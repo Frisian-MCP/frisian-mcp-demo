@@ -447,7 +447,8 @@ invalidates all three identities at once, silently.
 
 `NAUTOBOT_SECRET_KEY` is deliberately absent. It is generated per deployment on
 first boot and persisted to the `demo_state` volume, so no two deployments of
-this public image share a session-signing key.
+this public image share a signing key — the base image ships a hardcoded one,
+and a published signing key is not a signing key.
 
 For the full annotated reference, read [`.env.example`](.env.example).
 
@@ -489,5 +490,11 @@ docker compose down -v   # stop and discard local state as well
 
 All three return the estate to its baked state on the next start; the database
 keeps nothing across a restart by design. `down -v` additionally discards the
-generated secret key, which invalidates existing browser sessions but not the
-demo tokens. See [Every start is a fresh estate](#every-start-is-a-fresh-estate).
+generated secret key.
+
+Browser sessions do not survive **any** of them — the session table lives in
+the database, so it goes with everything else and you log in again. The demo
+tokens always keep working, because they are verified against the fixed HMAC
+key rather than the per-deployment secret key.
+
+See [Every start is a fresh estate](#every-start-is-a-fresh-estate).
