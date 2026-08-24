@@ -32,8 +32,9 @@ cd frisian-mcp-demo/nautobot
 docker compose up
 ```
 
-First start restores the demo database and takes a few minutes. Subsequent
-starts do the same, by design — see the host README.
+The stack is ready in about a minute once the images are downloaded. The demo
+database is restored on every start, not just the first — that is deliberate,
+and the host README explains why.
 
 When the stack is healthy, point an MCP client at it using one of the published
 demo identities from
@@ -131,16 +132,20 @@ tests for `tools/list` and `help`.
 
 ## Local build
 
-The quickstart pulls prebuilt images. To build a host's images locally instead:
+The quickstart pulls prebuilt images. A host's **application** image also
+builds from a clean clone:
 
 ```bash
 cd nautobot
-docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
+docker compose -f docker-compose.yml -f docker-compose.build.yml build nautobot
 ```
 
-The database image build requires a golden SQL artifact that is not committed;
-CI injects it after inherited credentials have been reset. A local build
-without it fails rather than producing an empty or unsafe image.
+The **database** image does not, and is meant to be pulled. It bakes in a
+pre-seeded SQL artifact that is deliberately not committed — CI produces it
+after the estate's inherited credentials have been reset. Building it on a
+clean clone fails at that missing file, which is the intended outcome: an
+empty database image that looks like a working demo would be worse than a
+build error. See the host README for the detail.
 
 ## Publishing
 

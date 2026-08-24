@@ -77,15 +77,14 @@ a fix shipped in a new image reaches everyone who pulls it. If you notice the
 restore happening again on a later `docker compose up`, that is the design and
 not a fault.
 
-The restore takes **a few minutes**, during which the `db` service is
-intentionally not healthy and the application waits behind the compose
-healthcheck. The healthcheck allows up to 15 minutes before it gives up, so a
-wait of several minutes is inside the expected envelope.
+The restore itself takes **about four seconds** — the demo estate is small.
+While it runs, the `db` service is intentionally not healthy and the
+application waits behind the compose healthcheck.
 
-> No measured restore time is published here yet, on purpose. An optimistic
-> figure would cause the exact failure this section exists to prevent — a user
-> reading a normal wait as a hang, because the documentation told them it
-> should already be over.
+Most of the startup time is the application, not the database. From
+`docker compose up` to a stack that answers requests is **about a minute** once
+both images are present locally. The first run also has to download them, which
+depends on your connection and is usually the longest part.
 
 The demo's change log starts empty on purpose. The object-change history from
 building this estate is truncated before the public image is baked, because it
@@ -408,16 +407,31 @@ For the full annotated reference, read [`.env.example`](.env.example).
 
 ## Local build
 
-The default path pulls prebuilt images. To build both locally:
+The default path pulls both prebuilt images, and is the one to use unless you
+are changing the image contents.
+
+**The application image builds from a clean clone. The database image does
+not** — it bakes in `db/demo.sql.gz`, and that artifact is deliberately not
+committed. It is a binary blob built by CI after the estate's inherited
+credentials have been reset, and a public repository is not the place for it.
+So on a fresh clone:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
+# application image: builds
+docker compose -f docker-compose.yml -f docker-compose.build.yml build nautobot
+
+# database image: fails, and this is expected
+#   COPY db/demo.sql.gz  ->  "/db/demo.sql.gz": not found
 ```
 
-The database image build requires `db/demo.sql.gz`, which is not committed. CI
-injects the golden artifact after inherited credentials have been reset. A
-local build without that file fails rather than producing an empty or unsafe
-demo image.
+Pull the database image rather than building it, which is what the default
+`docker compose up` already does. If you genuinely need to build it — because
+you are seeding a different estate — put your own `demo.sql.gz` at
+`nautobot/db/` first, and the build will pick it up.
+
+The `COPY` failing is the intended behaviour: a database image built without
+that file would start empty, and an empty demo that looks like a working one is
+worse than a build error.
 
 ## Stop and reset
 
