@@ -33,8 +33,9 @@ docker compose up
 ```
 
 The stack is ready in about a minute once the images are downloaded. The demo
-database is restored on every start, not just the first — that is deliberate,
-and the host README explains why.
+database is restored on the first start, and again after a
+`docker compose down` — but **not** on a plain `restart`, so changes you make
+while exploring survive one. The host README covers resetting.
 
 When the stack is healthy, point an MCP client at it using one of the published
 demo identities from
@@ -85,10 +86,12 @@ where the more privileged door deliberately carries *less* surface, is in the
 host README.
 
 > One thing to skip: comparing `tools/list` lengths between the two scoped
-> doors. Both return 12 identically-named tools for every caller, because the
-> group list belongs to the route rather than the caller. The per-identity
-> difference is one level down, in each dispatcher's action list, which is what
-> `help` returns.
+> doors. Both return 12 identically-named tools for `demo-readonly` and
+> `demo-netops` — not because the group list belongs to the route, but because
+> the route's allow-list has already removed nearly everything those two differ
+> on. `demo-admin` sees 13 on the same door. The per-identity difference is
+> real everywhere; it is simply plainest one level down, in each dispatcher's
+> action list, which is what `help` returns.
 
 ## Demo hosts
 

@@ -68,14 +68,29 @@ ROUTE="mcp/read-only" \
 
 Twelve tools come back. The walkthrough below is what makes that interesting.
 
-## First boot, and every boot
+## First boot, and resetting
 
-The database image restores its baked demo estate when the database starts.
-**It does this on every start, not only the first** — this host deliberately
-persists no database volume, so each run begins from the same known estate and
-a fix shipped in a new image reaches everyone who pulls it. If you notice the
-restore happening again on a later `docker compose up`, that is the design and
-not a fault.
+The database image restores its baked demo estate **when the database starts
+with no existing data**. In practice that means the first `docker compose up`,
+and any `up` after a `docker compose down`.
+
+It does **not** restore on `docker compose restart`, and it does not restore on
+an `up` that only changes `DEMO_TAG` while the containers are still present. In
+those cases the database keeps what is already there and logs:
+
+```text
+PostgreSQL Database directory appears to contain a database; Skipping initialization
+```
+
+The practical consequence is the one to remember: **changes you make to the
+demo estate survive a restart.** That is convenient while you are exploring,
+and it means "I restarted it" is not how you get back to a clean estate.
+
+To return to the baked estate deliberately:
+
+```bash
+docker compose down -v && docker compose up
+```
 
 The restore itself takes **about four seconds** — the demo estate is small.
 While it runs, the `db` service is intentionally not healthy and the
@@ -142,10 +157,36 @@ TOKEN="frisian-demo-netops-token-public-do-not-reuse" ROUTE="mcp/read-write" \
   ../common/mcp-clients/curl-tools-list.sh
 ```
 
-Both return **12 tools, with identical names**. That is correct and expected.
-The scoped doors publish one dispatcher per resource group, and the group list
-is a property of the *route*, not of the caller. The per-identity difference is
-real, but it lives one level down — inside each dispatcher's action list.
+Both return **12 tools, with identical names**. That is correct and expected —
+but not for the reason it first appears.
+
+Two filters run in series. The route's allow-list fixes the **candidate set**,
+and permission-aware discovery then filters **within** that set, per identity.
+On the scoped doors the allow-list has already removed almost everything these
+two identities differ on, so the second filter has almost nothing left to do and
+the result looks like a property of the route alone. It is not.
+
+The same door, asked by `demo-admin`, returns **13**:
+
+```text
+mcp/read-only    demo-readonly   12
+mcp/read-write   demo-netops     12
+mcp/read-only    demo-admin      13     <- load_balancers
+```
+
+`load_balancers` is on that door's allow-list, so the group is **mounted for
+everyone** — it is hidden from `tools/list` for identities that cannot use it,
+not absent. Invoking it as `demo-readonly` proves the difference, because a
+refusal is not the same answer as a missing route:
+
+```text
+demo-readonly   403  "You do not have permission to use 'loadbalancerpool'/'list'"
+demo-admin      200
+```
+
+So the per-identity difference is real on every door. On the scoped doors it is
+just mostly masked, and the place it shows plainly is one level down — inside
+each dispatcher's action list.
 
 ### 1. Same door, same token, two different answers
 
@@ -212,8 +253,10 @@ TOKEN="frisian-demo-admin-token-public-do-not-reuse" ROUTE="mcp/admin" \
 47 tools, against 12 on the scoped doors — the full ungrouped surface,
 including everything the carve-outs removed.
 
-The admin door is also where per-identity counts become visible, because it
-applies no route carve of its own. The same three tokens against that one door:
+The admin door is where the per-identity filtering becomes *obvious*, because
+it applies no route carve of its own — nothing has narrowed the candidate set
+first, so the whole spread is on display. The same three tokens against that one
+door:
 
 ```text
 demo-readonly     23 tools
@@ -381,6 +424,16 @@ a matched pair — the database contains identities whose tokens are verified by
 a key the application image carries, so running two different tags is
 unsupported and fails in ways that look like broken authentication.
 
+**When you change `DEMO_TAG`, bring the stack down first:**
+
+```bash
+docker compose down -v && docker compose up
+```
+
+A plain `docker compose up` onto a new tag pulls the new images but keeps the
+existing database, so you would be running a new application image against the
+previous estate. Taking it down first is what makes the pair actually matched.
+
 ## Environment
 
 You do not need to create `.env`; it is committed so that a fresh clone works
@@ -436,10 +489,14 @@ worse than a build error.
 ## Stop and reset
 
 ```bash
-docker compose down      # stop
-docker compose down -v   # stop and discard local state
+docker compose restart   # restart in place — the estate is KEPT
+docker compose down      # stop and remove the containers
+docker compose down -v   # stop and discard local state as well
 ```
 
-Because no database volume is persisted, the estate returns to its baked state
-on the next start either way. `-v` additionally discards the generated secret
-key, which invalidates existing browser sessions but not the demo tokens.
+Both `down` forms return the estate to its baked state on the next `up`.
+`restart` does not — it leaves the database exactly as you left it. See
+[First boot, and resetting](#first-boot-and-resetting).
+
+`-v` additionally discards the generated secret key, which invalidates existing
+browser sessions but not the demo tokens.
