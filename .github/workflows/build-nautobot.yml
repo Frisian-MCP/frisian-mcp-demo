@@ -32,8 +32,14 @@ on:
         required: true
         type: string
       frisian_mcp_spec:
-        description: "Full pip requirement specifier for frisian-mcp. REQUIRED — there is no default. Publishing additionally requires a PyPI pin at or above the hardening floor."
-        required: true
+        description: "PyPI requirement specifier, e.g. frisian-mcp[usage]==1.1.0. Required for the testpypi and release lanes. Leave empty on rehearsal."
+        required: false
+        default: ""
+        type: string
+      frisian_mcp_local_wheel:
+        description: "Wheel filename under nautobot/wheels/. Required for the rehearsal lane. Leave empty otherwise. Note: wheels are gitignored, so CI has none."
+        required: false
+        default: ""
         type: string
       lane:
         description: "Where frisian-mcp comes from. Only 'release' may publish to GHCR."
@@ -101,6 +107,7 @@ jobs:
       demo_tag: ${{ steps.tag.outputs.demo_tag }}
       publish: ${{ steps.tag.outputs.publish }}
       spec: ${{ steps.tag.outputs.spec }}
+      local_wheel: ${{ steps.tag.outputs.local_wheel }}
       lane: ${{ steps.tag.outputs.lane }}
       pip_index_url: ${{ steps.tag.outputs.pip_index_url }}
       pip_extra_index_url: ${{ steps.tag.outputs.pip_extra_index_url }}
@@ -125,21 +132,43 @@ jobs:
             *) echo "::error::Unknown lane '$lane'."; exit 1 ;;
           esac
           spec="${{ github.event.inputs.frisian_mcp_spec }}"
+          wheel="${{ github.event.inputs.frisian_mcp_local_wheel }}"
 
           [ -n "$tag" ] || { echo "::error::No demo tag resolved."; exit 1; }
 
-          # S-6. No fallback value: a build with no pin must stop here rather
-          # than quietly resolving to some version nobody chose.
-          if [ -z "$spec" ]; then
-            echo "::error::frisian_mcp_spec is required and has no default (S-6)."
-            echo "A tag-push cannot supply it, so tag-triggered runs must set it"
-            echo "via a repository variable or be replaced by workflow_dispatch."
+          # S-6, and it mirrors the Dockerfile's own guard rather than
+          # duplicating half of it. There is no fallback value in either
+          # place: a build with no source must stop rather than quietly
+          # resolving to some version nobody chose, and a build with TWO
+          # sources must stop rather than silently picking a lane — which is
+          # how the unreproducible image arose in the first place.
+          if [ -n "$spec" ] && [ -n "$wheel" ]; then
+            echo "::error::Both frisian_mcp_spec and frisian_mcp_local_wheel are set. Pick one lane."
             exit 1
           fi
+          if [ -z "$spec" ] && [ -z "$wheel" ]; then
+            echo "::error::No frisian-mcp source selected, and there is no default (S-6)."
+            echo "  testpypi/release lane: frisian_mcp_spec"
+            echo "  rehearsal lane:        frisian_mcp_local_wheel"
+            echo "A tag push cannot supply either, so tag-triggered runs must set"
+            echo "frisian_mcp_spec via a repository variable."
+            exit 1
+          fi
+
+          # The lane and the source have to agree. A wheel on the release lane
+          # is the case that matters: it would publish an image built from a
+          # file nobody else can reproduce.
+          case "$lane" in
+            rehearsal)
+              [ -n "$wheel" ] || { echo "::error::lane=rehearsal needs frisian_mcp_local_wheel, not a PyPI spec."; exit 1; } ;;
+            testpypi|release)
+              [ -n "$spec" ] || { echo "::error::lane=$lane needs frisian_mcp_spec, not a local wheel."; exit 1; } ;;
+          esac
 
           echo "demo_tag=$tag"   >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
           echo "spec=$spec"      >> "$GITHUB_OUTPUT"
+          echo "local_wheel=$wheel" >> "$GITHUB_OUTPUT"
           echo "lane=$lane"      >> "$GITHUB_OUTPUT"
           echo "lane: $lane"
 
@@ -230,16 +259,38 @@ jobs:
             }
           done
 
+      - name: Guard — the rehearsal lane needs a wheel that CI does not have
+        if: needs.resolve.outputs.lane == 'rehearsal'
+        env:
+          WHEEL: ${{ needs.resolve.outputs.local_wheel }}
+        run: |
+          set -euo pipefail
+          # nautobot/wheels/*.whl is gitignored, deliberately — a rehearsal
+          # wheel is a build input, never a repo artifact. So a fresh checkout
+          # has none, and the rehearsal lane is a LOCAL lane by construction.
+          #
+          # Saying so here beats a confusing COPY failure four steps later.
+          if [ ! -f "nautobot/wheels/${WHEEL}" ]; then
+            echo "::error::nautobot/wheels/${WHEEL} is not in this checkout."
+            echo "Rehearsal wheels are gitignored, so this lane cannot run in CI."
+            echo "Build it locally, or use the testpypi/release lane here."
+            exit 1
+          fi
+
       - name: Build both images, amd64 only, loaded locally
         env:
           DEMO_TAG: ${{ needs.resolve.outputs.demo_tag }}
           SPEC: ${{ needs.resolve.outputs.spec }}
+          WHEEL: ${{ needs.resolve.outputs.local_wheel }}
           IDX: ${{ needs.resolve.outputs.pip_index_url }}
           XIDX: ${{ needs.resolve.outputs.pip_extra_index_url }}
         run: |
           set -euo pipefail
+          # Both lane args are passed and exactly one is non-empty; the
+          # Dockerfile refuses if that stops being true.
           docker buildx build --load --platform linux/amd64 \
             --build-arg "FRISIAN_MCP_SPEC=${SPEC}" \
+            --build-arg "FRISIAN_MCP_LOCAL_WHEEL=${WHEEL}" \
             --build-arg "PIP_INDEX_URL=${IDX}" \
             --build-arg "PIP_EXTRA_INDEX_URL=${XIDX}" \
             -t "${APP_IMAGE}:${DEMO_TAG}" -f nautobot/Dockerfile nautobot/
@@ -324,6 +375,14 @@ jobs:
           if [ "$LANE" != "release" ]; then
             echo "::error::lane is '$LANE'. Only 'release' may publish to GHCR."
             echo "rehearsal = local source; testpypi = non-durable index. Neither ships."
+            exit 1
+          fi
+
+          # 0a. A local wheel can never back a published image: nobody outside
+          #     this machine can reproduce it, and the lane check above should
+          #     already have caught it.
+          if [ -n "${{ needs.resolve.outputs.local_wheel }}" ]; then
+            echo "::error::A local wheel is set on the release lane. A published image must come from an index."
             exit 1
           fi
 
