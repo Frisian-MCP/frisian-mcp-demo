@@ -355,73 +355,98 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: GATE — the published image must be built on a released, hardened frisian-mcp
+      - name: GATE — what may be published, and under what tag
+        # ONE env block. There were two here, which is a duplicate YAML key:
+        # the second silently replaced the first and SPEC never reached the
+        # script, so this gate hard-failed on an unbound variable and reported
+        # it as a bad pin. Fail-closed, but for the wrong reason and with a
+        # misleading message. `yaml.load` accepts duplicate keys and takes the
+        # last, so "the YAML parses" did not catch it.
         env:
           SPEC: ${{ needs.resolve.outputs.spec }}
-        env:
+          WHEEL: ${{ needs.resolve.outputs.local_wheel }}
           LANE: ${{ needs.resolve.outputs.lane }}
+          TAG: ${{ needs.resolve.outputs.demo_tag }}
           IDX: ${{ needs.resolve.outputs.pip_index_url }}
           XIDX: ${{ needs.resolve.outputs.pip_extra_index_url }}
         run: |
           set -euo pipefail
 
-          # 0. Only the release lane may publish.
+          # WHAT CHANGED, AND WHY, because this gate used to say the opposite.
           #
-          #    rehearsal builds from local source; testpypi builds from an index
-          #    that is explicitly NON-DURABLE — files can be deleted and it
-          #    prunes. Either is fine for validating our own work and neither is
-          #    fine underneath someone else's `docker pull`, where the image
-          #    outlives the index it was built from.
-          if [ "$LANE" != "release" ]; then
-            echo "::error::lane is '$LANE'. Only 'release' may publish to GHCR."
-            echo "rehearsal = local source; testpypi = non-durable index. Neither ships."
-            exit 1
-          fi
+          # It previously refused every lane but `release`, on the reasoning
+          # that a local wheel is unreproducible. That reasoning was correct
+          # when it was written and is no longer true: the local lane now
+          # builds from a clean `origin/main` export with the wheel's sha256
+          # recorded, and the Dockerfile refuses any wheel lacking the H3/H9
+          # markers. Reproducibility is what made the rule right, and
+          # reproducibility is what N6/N7 restored.
+          #
+          # So the rule is no longer "which index" but "can this be reproduced,
+          # and is the tag honest about what it is".
 
-          # 0a. A local wheel can never back a published image: nobody outside
-          #     this machine can reproduce it, and the lane check above should
-          #     already have caught it.
-          if [ -n "${{ needs.resolve.outputs.local_wheel }}" ]; then
-            echo "::error::A local wheel is set on the release lane. A published image must come from an index."
-            exit 1
-          fi
+          case "$LANE" in
+            testpypi)
+              # Unchanged, and this one is NOT a discipline call. Test PyPI is
+              # explicitly non-durable: files can be deleted and it prunes. An
+              # image published from it breaks silently later under someone
+              # else's `docker pull`, when the index it was built from no
+              # longer has the artifact.
+              echo "::error::lane=testpypi cannot publish. The index is non-durable;"
+              echo "a published image would outlive the artifact it was built from."
+              exit 1
+              ;;
 
-          # 0b. Belt and braces: the release lane sets no index override, so a
-          #     non-empty one here means the lane and the index disagree.
-          if [ -n "${IDX:-}" ] || [ -n "${XIDX:-}" ]; then
-            echo "::error::A pip index override is set on the release lane (index='${IDX:-}' extra='${XIDX:-}')."
-            echo "A published image must resolve from real PyPI only."
-            exit 1
-          fi
+            rehearsal)
+              # MAY publish, but only under a tag that says so.
+              [ -n "$WHEEL" ] || { echo "::error::rehearsal publish needs a local wheel."; exit 1; }
+              case "$TAG" in
+                *-pre|*-pre.*|*-rc|*-rc.*) ;;
+                *)
+                  echo "::error::lane=rehearsal must publish under a pre-release tag, got '$TAG'."
+                  echo "This image carries a locally built, pre-release frisian-mcp. A tag that"
+                  echo "does not say so invites someone to treat it as a release build."
+                  exit 1 ;;
+              esac
+              echo "Gate passed: rehearsal -> pre-release tag '$TAG', wheel '$WHEEL'"
+              ;;
 
-          # 1. It must be a PyPI version pin. This is what makes the rehearsal
-          #    lane structurally unable to reach GHCR: a local path, an
-          #    editable install, a VCS URL or an unpinned name all stop here,
-          #    by construction rather than by discipline.
-          if ! printf '%s' "$SPEC" | grep -qE '^frisian-mcp(\[[a-z0-9,._-]+\])?==[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::FRISIAN_MCP_SPEC is not a PyPI version pin: '$SPEC'"
-            echo "Publishing requires an exact released version, e.g. frisian-mcp[usage]==1.1.1."
-            echo "Local paths, editable installs, VCS URLs and unpinned names are rehearsal-only"
-            echo "and must never reach a public GHCR package."
-            exit 1
-          fi
+            release)
+              # A release tag makes a promise about the package, so it still
+              # has to be a real PyPI pin at or above the hardening floor.
+              [ -z "$WHEEL" ] || { echo "::error::a local wheel cannot back a release tag."; exit 1; }
+              if [ -n "${IDX:-}" ] || [ -n "${XIDX:-}" ]; then
+                echo "::error::a pip index override is set on the release lane."
+                exit 1
+              fi
+              case "$TAG" in
+                *-pre|*-pre.*|*-rc|*-rc.*)
+                  echo "::error::lane=release must not publish under a pre-release tag, got '$TAG'."
+                  exit 1 ;;
+              esac
+              if ! printf '%s' "$SPEC" | grep -qE '^frisian-mcp(\[[a-z0-9,._-]+\])?==[0-9]+\.[0-9]+\.[0-9]+$'; then
+                echo "::error::FRISIAN_MCP_SPEC is not a PyPI version pin: '$SPEC'"
+                exit 1
+              fi
+              version="${SPEC##*==}"
+              lowest=$(printf '%s\n%s\n' "$version" "$FRISIAN_MCP_MIN_VERSION" | sort -V | head -1)
+              if [ "$version" != "$FRISIAN_MCP_MIN_VERSION" ] && [ "$lowest" = "$version" ]; then
+                echo "::error::frisian-mcp $version is below the publish floor $FRISIAN_MCP_MIN_VERSION."
+                echo "Raise the floor deliberately if a qualifying release now exists;"
+                echo "do not lower it to make a run pass."
+                exit 1
+              fi
+              echo "Gate passed: release -> $SPEC (floor $FRISIAN_MCP_MIN_VERSION), tag '$TAG'"
+              ;;
+          esac
 
-          # 2. It must be at or above the hardening floor.
-          version="${SPEC##*==}"
-          lowest=$(printf '%s\n%s\n' "$version" "$FRISIAN_MCP_MIN_VERSION" | sort -V | head -1)
-          if [ "$version" != "$FRISIAN_MCP_MIN_VERSION" ] && [ "$lowest" = "$version" ]; then
-            echo "::error::frisian-mcp $version is below the publish floor $FRISIAN_MCP_MIN_VERSION."
-            echo "The demo's posture depends on H3 + H9. Releases below the floor do not carry them."
-            echo "If a qualifying release now exists, raise FRISIAN_MCP_MIN_VERSION deliberately —"
-            echo "do not lower it to make this run pass."
-            exit 1
-          fi
-
-          # Note: neither check proves CONTENT. A version string is not
-          # evidence — main also calls itself 1.1.0 without the hardening. The
-          # content assertion lives in nautobot/Dockerfile and runs during the
-          # image builds below.
-          echo "Gate passed: $SPEC (floor $FRISIAN_MCP_MIN_VERSION)"
+          # NONE of the above proves CONTENT, on any lane. A version string is
+          # not evidence — main also called itself 1.1.0 without the hardening.
+          # The real guarantee is the build-time assertion in nautobot/
+          # Dockerfile that _caller_rank and entry_is_visible are importable
+          # from the installed package. It runs on every lane and it is the
+          # reason the rehearsal lane can be trusted to publish at all.
+          echo "Content is guaranteed by the Dockerfile assertion, not by this gate."
 
       - uses: actions/download-artifact@v4
         with:

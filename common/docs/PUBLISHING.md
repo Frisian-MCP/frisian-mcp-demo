@@ -37,9 +37,30 @@ through to the one that can.
 
 | lane | source | validates | may publish |
 |---|---|---|---|
-| `rehearsal` | local source tree | today's work | **no** |
+| `rehearsal` | local wheel from a clean `origin/main` export | today's work | **yes — pre-release tag only** |
 | `testpypi` | Test PyPI | the packaged **artifact** | **no** |
 | `release` | real PyPI | what users get | **yes** |
+
+### Why `rehearsal` may publish, when it originally could not
+
+The first version of this rule refused every lane but `release`, on the
+reasoning that a locally built wheel is unreproducible. That was correct when
+it was written and stopped being true: the local lane now builds from a clean
+`origin/main` export with the wheel's sha256 recorded on the image, and the
+Dockerfile refuses any wheel missing the H3/H9 markers.
+
+**Reproducibility is what made the rule right, so reproducibility is what
+lifted it** — not convenience, and not the fact that the release was late.
+
+The condition is that the tag must say what it is. A rehearsal publish goes out
+under a **pre-release tag** (`-pre` / `-rc`), and the gate refuses a rehearsal
+build under a plain tag and a release build under a pre-release one. An image
+carrying a frisian-mcp nobody can `pip install` must not wear a tag that
+invites the next person to treat it as a release.
+
+`testpypi` still cannot publish, and that one is not a discipline call: the
+index is non-durable, so a published image would outlive the artifact it was
+built from.
 
 ### Why the middle lane exists
 
@@ -136,6 +157,43 @@ the current one.
 If a moving pointer is wanted later, it should move only after a
 verification-from-clean pass, and the reasoning above should be revisited
 rather than assumed stale.
+
+---
+
+## Publishing: one command
+
+`nautobot/publish.sh` is the whole flow. It defaults to a dry run, so the
+rehearsal is the same code path as the real thing.
+
+```bash
+cd nautobot
+./publish.sh            # build both images multi-arch, verify, push NOTHING
+./publish.sh --push     # the real one
+```
+
+It derives the lane, the build args, the tag suffix and the provenance labels
+from a **single line** at the top of the file:
+
+```bash
+FRISIAN_MCP_SOURCE="local-wheel:frisian_mcp-1.1.0-py3-none-any.whl"
+```
+
+When a frisian-mcp release carrying the H3/H9 hardening exists, that one line
+becomes:
+
+```bash
+FRISIAN_MCP_SOURCE="pypi:frisian-mcp[usage]==1.1.0"
+```
+
+and the lane flips to `release`, the `-pre` suffix disappears from the tag, and
+the labels change with it. **Nothing else needs editing** — not the workflow,
+not the compose files, not this document. That is deliberate: a version
+placeholder that requires touching five files is one somebody eventually gets
+half-right.
+
+Both images are built and pushed back to back in the same run. They are two
+halves of one artifact, so a partial publish is exactly the mixed state the
+lockstep tag exists to prevent.
 
 ---
 
