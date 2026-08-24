@@ -175,25 +175,48 @@ Two constraints on the pinned major:
 If those two ranges do not overlap, the dump has to be re-cut with a matching
 client — not worked around in the image.
 
-### Do not persist `PGDATA`. Ruled, and it is the guarantee.
+### Mount `PGDATA` as a tmpfs. Declaring no volume is NOT enough.
 
-`/docker-entrypoint-initdb.d/` scripts run **only when `PGDATA` is empty**. A
-host that persists the database in a named volume will not restore a newer
-dump on upgrade: the user pulls a new `DEMO_TAG`, gets the new application
-image, and keeps the old database.
+`/docker-entrypoint-initdb.d/` scripts run **only when `PGDATA` is empty**. If
+`PGDATA` survives, a host will not restore a newer dump on upgrade: the user
+pulls a new `DEMO_TAG`, gets the new application image, and keeps the old
+database.
 
 That is not merely a stale read. The application entrypoint runs
 `post_upgrade` — i.e. `migrate` — on every start, so the new image **actively
-migrates the stale database in place**, on the user's machine, unprompted.
+migrates the stale database in place**, on the user's machine, unprompted, and
+comes up green.
 
-So no host mounts a volume at `PGDATA`. Empty every boot, `initdb.d` always
-fires, and the database is always the one the application image was built for.
-The lockstep guarantee becomes true **by construction** rather than by a check
-that can be raced or edited away.
+**Leaving the volume out of the compose file does not prevent this.** The
+`postgres` image declares `VOLUME /var/lib/postgresql/data` in its own
+Dockerfile, so Docker creates an **anonymous** volume regardless, and Compose
+**preserves anonymous volumes when it recreates a container**. Measured, same
+harness both ways:
 
-The cost is a restore on every start. For a demo whose estate is the product
-and where nobody's local poking is precious, that is the right trade. Adding
-the volume back is the obvious "fix" and it is the thing not to do.
+| action | anonymous volume | tmpfs |
+|---|---|---|
+| first `up` | initdb runs | initdb runs |
+| `restart` | **skipped** | initdb runs |
+| `up` onto a changed image | **skipped** | initdb runs |
+
+That middle column is the upgrade path a user actually takes, and it is why
+"we declared no volume" is not a guarantee.
+
+So every host mounts `PGDATA` as a tmpfs:
+
+```yaml
+    tmpfs:
+      - /var/lib/postgresql/data:size=1g
+```
+
+A tmpfs cannot outlive the container, so there is no state for Compose to
+preserve. No uid/gid/mode is needed — the postgres entrypoint chowns `PGDATA`
+itself.
+
+Two consequences, both intended: **edits to the demo estate do not survive a
+restart**, and `PGDATA` lives in RAM (the size is a cap, not a reservation).
+For a demo whose estate is the product and where nobody's local poking is
+precious, that is the right trade.
 
 ### The database role is asserted, not assumed
 
@@ -230,8 +253,8 @@ vendoring it. That requirement is usually a sign the base image is wrong.
 4. `db/Dockerfile` — `FROM postgres:<pinned>` + `COPY demo.sql.gz`.
 5. `docker-compose.yml` — services named per the table above; both images from
    `${DEMO_TAG}`; ports bound to `${DEMO_BIND_HOST:-127.0.0.1}`; no
-   `env_file:`; **no volume at `PGDATA`**; real healthcheck-based
-   `depends_on`, never a sleep.
+   `env_file:`; **`PGDATA` mounted as a tmpfs** (not merely un-declared);
+   real healthcheck-based `depends_on`, never a sleep.
 6. `docker-compose.build.yml` — build inputs only. It must not restate ports,
    volumes or environment.
 7. `.env` + `.env.example`.

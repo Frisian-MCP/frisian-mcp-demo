@@ -119,23 +119,41 @@ services:
     image: "ghcr.io/frisian-mcp/demo-nautobot-db:${DEMO_TAG:-v0.1.0}"
     restart: unless-stopped
     environment: *db_env
-    # NO NAMED VOLUME FOR PGDATA. Deliberate, and it is the guarantee.
+
+    # PGDATA IS A tmpfs, AND THAT IS THE GUARANTEE. Do not replace it with a
+    # volume, and do not delete it because "no volume is declared anyway".
     #
-    # `/docker-entrypoint-initdb.d/` runs only when PGDATA is empty. Persist it
-    # and a newer DEMO_TAG does NOT restore its dump: the user gets the new
-    # application image on top of the old database. That is not a read-side
-    # wrongness either — the app entrypoint runs `post_upgrade` (i.e. migrate)
-    # on every start, so the stale database is actively MIGRATED IN PLACE on
-    # the user's machine, unprompted.
+    # `/docker-entrypoint-initdb.d/` runs only when PGDATA is empty. If PGDATA
+    # survives, a newer DEMO_TAG does not restore its dump — the user gets the
+    # new application image on top of the old database. Not merely a stale
+    # read: the app entrypoint runs `post_upgrade` (i.e. migrate) on every
+    # start, so the old database is actively MIGRATED IN PLACE on the user's
+    # machine, unprompted, and comes up green.
     #
-    # With no volume, PGDATA is empty every boot, initdb.d always fires, and
-    # the database is always the one the app image was built for. The lockstep
-    # guarantee becomes true by construction rather than by a check that can be
-    # raced or edited away.
+    # Simply declaring no volume does NOT prevent this, which is what an
+    # earlier version of this file got wrong. The postgres image declares
+    # `VOLUME /var/lib/postgresql/data` in its own Dockerfile, so Docker
+    # creates an ANONYMOUS volume regardless — and Compose preserves anonymous
+    # volumes when it recreates a container. Measured, both ways:
     #
-    # The cost is the restore on every start. For a demo whose estate is the
-    # product and where nobody's poking is precious, that is the right trade.
-    # Do not "fix" this by adding a volume back.
+    #   anonymous volume          tmpfs
+    #   first up      initdb      first up      initdb
+    #   restart       SKIPPED     restart       initdb
+    #   changed image SKIPPED     changed image initdb     <- the upgrade path
+    #
+    # A tmpfs cannot outlive the container, so there is no state for Compose to
+    # preserve and initdb.d fires on every start. True by construction rather
+    # than by a check that can be raced or edited away.
+    #
+    # Consequences, both intended: edits to the demo estate do NOT survive a
+    # restart, and PGDATA lives in RAM (~85MB for this estate; the cap below is
+    # a cap, not a reservation). For a demo whose estate is the product and
+    # where nobody's local poking is precious, that is the right trade.
+    #
+    # No uid/gid/mode needed — the postgres entrypoint chowns PGDATA itself.
+    tmpfs:
+      - /var/lib/postgresql/data:size=1g
+
     healthcheck:
       # TCP, not the unix socket, and this is load-bearing.
       #
@@ -149,9 +167,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 60
-      # Generous: EVERY boot restores the full demo estate, because PGDATA is
-      # intentionally not persisted (see above). Measured clean boot to healthy
-      # for the whole stack is ~140s.
+      # Generous: EVERY container start restores the full demo estate, because
+      # PGDATA is a tmpfs (see above). The restore itself is ~4s; the cap is
+      # for the whole stack reaching healthy.
       start_period: 15m
 
   # ── Redis (cache + celery broker) ────────────────────────────────────────
@@ -273,5 +291,7 @@ services:
 volumes:
   media_root:
   demo_state:
-  # No pgdata volume. See the note on the `db` service — persisting it breaks
-  # the lockstep guarantee and lets a stale database be migrated in place.
+  # No pgdata volume, and that alone would NOT be sufficient — the postgres
+  # image declares its own VOLUME, so Docker would create an anonymous one and
+  # Compose would preserve it across a recreate. The `tmpfs` mount on the `db`
+  # service is what actually prevents PGDATA persisting. See the note there.
