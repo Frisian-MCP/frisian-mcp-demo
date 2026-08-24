@@ -103,6 +103,36 @@ $PUSH && OUTPUT="--push"
 # Both images, one tag, one invocation each, back to back. They are two halves
 # of one artifact: a dump is welded to the migration state that produced it, so
 # a partial publish is the mixed state the lockstep tag exists to prevent.
+# Preflight: refuse to build if we cannot push.
+#
+# Without this, a missing ghcr.io credential surfaces AFTER both multi-arch
+# builds, as "failed to fetch anonymous token ... 403 Forbidden" during layer
+# export -- minutes of work and an error naming neither the cause nor the fix.
+# buildx falls back to ANONYMOUS when it finds no credential, so the 403 is the
+# registry refusing an anonymous push, not a permissions problem on the account.
+#
+# Checked against the credential store rather than ~/.docker/config.json: with
+# a credsStore configured, config.json carries no auths entry even when logged
+# in, so reading the file would report a false negative.
+if $PUSH; then
+  _store="$(python3 -c 'import json,os;print(json.load(open(os.path.expanduser("~/.docker/config.json"))).get("credsStore",""))' 2>/dev/null || true)"
+  _have_ghcr=false
+  if [ -n "$_store" ] && command -v "docker-credential-${_store}" >/dev/null 2>&1; then
+    "docker-credential-${_store}" list 2>/dev/null | grep -q 'ghcr\.io' && _have_ghcr=true
+  else
+    grep -q '"ghcr\.io"' ~/.docker/config.json 2>/dev/null && _have_ghcr=true
+  fi
+  if ! $_have_ghcr; then
+    echo "ERROR: not logged in to ghcr.io — refusing to build." >&2
+    echo "       buildx would fall back to an anonymous push and fail at export." >&2
+    echo >&2
+    echo "       docker login ghcr.io -u <github-username>" >&2
+    echo "       (password = a GitHub PAT with the write:packages scope)" >&2
+    exit 1
+  fi
+  echo "  ghcr.io   credential found"
+fi
+
 echo "==> db image"
 docker buildx build $OUTPUT --platform "$PLATFORMS" \
   "${LABELS[@]}" \
