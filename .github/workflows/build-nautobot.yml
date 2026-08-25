@@ -42,19 +42,37 @@ on:
         default: ""
         type: string
       lane:
-        description: "Where frisian-mcp comes from. 'rehearsal' publishes only under a -pre/-rc tag; 'release' only under a plain one; 'testpypi' never publishes."
+        description: "Where frisian-mcp comes from. Dispatch never publishes on any lane -- this only selects what gets built and verified."
         required: false
         default: rehearsal
         type: choice
         options: [rehearsal, testpypi, release]
-      publish:
-        description: "Push to GHCR. Unchecked = build and verify only. Honoured on rehearsal AND release; the publish gate decides whether the lane and tag agree."
-        required: false
-        default: false
-        type: boolean
+
+  # PUBLISHING HAPPENS HERE, AND ONLY HERE.
+  #
+  # A merge to `main` that touches a path below. Nothing about the build comes
+  # from an operator: the tag is read from the merged tree's nautobot/.env and
+  # the source from a repository variable, so what publishes is what a
+  # reviewer approved rather than what someone typed into a form afterwards.
+  #
+  # That is what makes branch protection an actual publish control. It governs
+  # MERGES, so any trigger that is not a merge walks around it -- which is why
+  # `workflow_dispatch` lost its `publish` input in the same change, and why
+  # the `nautobot-v*` tag trigger was removed rather than kept:
+  #
+  #   - a tag push is not a merge, so branch protection does not cover it. It
+  #     needs a separate tag ruleset, which did not exist.
+  #   - `paths:` below would have applied to it as well, and a tag pointing at
+  #     an already-pushed commit introduces no changed files -- so the trigger
+  #     would have quietly stopped firing rather than failing visibly.
+  #
+  # Restoring it means solving both, deliberately. Do not just paste it back.
   push:
-    tags:
-      - "nautobot-v*"
+    branches: [main]
+    paths:
+      - 'nautobot/**'
+      - 'common/**'
+      - '.github/workflows/build-nautobot.yml'
 
 concurrency:
   # Serialised per tag: two runs publishing the same DEMO_TAG could push an app
@@ -111,35 +129,78 @@ jobs:
       lane: ${{ steps.tag.outputs.lane }}
       pip_index_url: ${{ steps.tag.outputs.pip_index_url }}
       pip_extra_index_url: ${{ steps.tag.outputs.pip_extra_index_url }}
+    # `packages: read` is for the overwrite guard below, which asks the
+    # registry what is already published. Read-only: nothing in this job can
+    # push.
+    permissions:
+      contents: read
+      packages: read
     steps:
+      # Needed now that the tag comes out of the merged tree rather than an
+      # input. Without it, nautobot/.env is not on disk and the tag resolves
+      # to empty.
+      - uses: actions/checkout@v4
+
       - id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VAR_SPEC: ${{ vars.FRISIAN_MCP_SPEC }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "push" ]; then
-            tag="${GITHUB_REF_NAME#nautobot-}"   # refs/tags/nautobot-v1.2.3 -> v1.2.3
-            publish=true
+            # A merge to main. Every value is derived from the tree that was
+            # merged -- there are no inputs on this trigger, and that is the
+            # design rather than a limitation. What publishes is what a
+            # reviewer approved.
+            #
+            # nautobot/.env is the right source because it is TRACKED and is
+            # what a fresh clone's zero-flag `docker compose up` resolves.
+            # publish.sh already rewrites it at publish time, so the tag CI
+            # publishes and the tag a clone pulls cannot drift apart.
+            tag="$(sed -n 's/^DEMO_TAG=//p' nautobot/.env | head -1)"
+            [ -n "$tag" ] || {
+              echo "::error::No DEMO_TAG in nautobot/.env, so there is no tag to publish under."
+              exit 1; }
             lane=release
+            wheel=""
+            spec="${VAR_SPEC:-}"
+            if [ -z "$spec" ]; then
+              # NOT a failure, deliberately. Wheels are gitignored, so CI has
+              # none and cannot run the rehearsal lane at all; the release
+              # lane is all it has, and that needs a published frisian-mcp.
+              # Until the FRISIAN_MCP_SPEC repository variable is set, a merge
+              # builds and verifies and publishes nothing.
+              #
+              # Failing instead would put a red X on every merge to main, and
+              # a check that always fails is a check everyone learns to
+              # ignore -- including on the merge where it means something.
+              publish=false
+              echo "::notice::FRISIAN_MCP_SPEC is unset. Building and verifying only; nothing will be published."
+            else
+              publish=true
+            fi
           else
+            # Dispatch builds and verifies. It CANNOT publish, and there is no
+            # longer an input asking whether it should.
+            #
+            # Branch protection governs merges, so a dispatch publish walked
+            # straight around the review gate: anyone who can trigger a
+            # workflow could push to GHCR without a PR. At an org default
+            # repository permission of `write`, that is every member.
             tag="${{ github.event.inputs.demo_tag }}"
-            publish="${{ github.event.inputs.publish }}"
-            # Defaults to `rehearsal`, the most constrained lane: it can
-            # publish, but only under a -pre/-rc tag. A missing or
+            publish=false
+            # Defaults to `rehearsal`, the most constrained lane. A missing or
             # unrecognised value must not fall through to `release`, which
-            # publishes under a plain tag and makes a promise about the
-            # package. This said "the lane that cannot publish" until the
-            # tag-honesty rule replaced the release-only gate, and `publish`
-            # has never been filtered by lane here -- it is passed straight
-            # through and the gate below is what decides.
+            # makes a promise about the package.
             lane="${{ github.event.inputs.lane }}"
             lane="${lane:-rehearsal}"
+            spec="${{ github.event.inputs.frisian_mcp_spec }}"
+            wheel="${{ github.event.inputs.frisian_mcp_local_wheel }}"
           fi
           case "$lane" in
             rehearsal|testpypi|release) ;;
             *) echo "::error::Unknown lane '$lane'."; exit 1 ;;
           esac
-          spec="${{ github.event.inputs.frisian_mcp_spec }}"
-          wheel="${{ github.event.inputs.frisian_mcp_local_wheel }}"
-
           [ -n "$tag" ] || { echo "::error::No demo tag resolved."; exit 1; }
 
           # S-6, and it mirrors the Dockerfile's own guard rather than
@@ -170,6 +231,44 @@ jobs:
             testpypi|release)
               [ -n "$spec" ] || { echo "::error::lane=$lane needs frisian_mcp_spec, not a local wheel."; exit 1; } ;;
           esac
+
+          # ── Overwrite guard ───────────────────────────────────────────────
+          #
+          # A published tag is never overwritten. Retention and rollback both
+          # depend on an old demo tag still meaning what it meant when someone
+          # wrote it down.
+          #
+          # A merge cannot know whether DEMO_TAG was bumped, and inferring it
+          # from the diff would be wrong in both directions: a merge that
+          # edits .env for another reason looks like a bump, and a rebuild
+          # under an unchanged tag looks like it is not one. So ASK THE
+          # REGISTRY what already exists.
+          #
+          # Both packages are checked, not just the app: they publish as a
+          # lockstep pair, and one half already carrying the tag is exactly
+          # the mixed state that pairing exists to prevent.
+          if [ "$publish" = "true" ]; then
+            for pkg in demo-nautobot demo-nautobot-db; do
+              if ! existing="$(gh api --paginate \
+                    "/orgs/Frisian-MCP/packages/container/${pkg}/versions" \
+                    --jq '.[].metadata.container.tags[]' 2>/dev/null)"; then
+                echo "::error::Could not list published tags for ${pkg}."
+                echo "Refusing to publish. A guard that could not run is not a guard"
+                echo "that passed -- and this one is the only thing standing between a"
+                echo "merge and an overwritten release tag."
+                echo "Check that the repository still holds package read access under"
+                echo "the package's Manage Actions access settings."
+                exit 1
+              fi
+              if printf '%s\n' "$existing" | grep -qxF "$tag"; then
+                echo "::error::${pkg}:${tag} is already published, and published tags are immutable."
+                echo "Bump DEMO_TAG in nautobot/.env and merge again. Do not delete the"
+                echo "existing tag to make room -- someone may have it written down."
+                exit 1
+              fi
+            done
+            echo "Overwrite guard: neither package carries '$tag' yet."
+          fi
 
           echo "demo_tag=$tag"   >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
@@ -355,6 +454,29 @@ jobs:
     runs-on: ubuntu-latest
     needs: [resolve, artifact, verify]
     if: needs.resolve.outputs.publish == 'true'
+
+    # ⚠️ THIS LINE IS NOT A GATE BY ITSELF.
+    #
+    # Naming an environment that does not exist AUTO-CREATES it, with no
+    # protection rules, and the job then runs straight through. So the
+    # presence of this line proves nothing about whether anyone has to approve
+    # a publish -- it only creates the place where that rule can live.
+    #
+    # It becomes a control when `ghcr-publish` has REQUIRED REVIEWERS set at
+    # Settings -> Environments. Until someone does that, this is a label.
+    #
+    # Verify it the same way as everything else here: open the environment and
+    # read its protection rules, or watch a run actually pause for approval.
+    # A workflow cannot check this for itself -- GITHUB_TOKEN has no
+    # permission that can read environment protection rules -- which is
+    # exactly why it is written down instead of asserted.
+    #
+    # Why it exists alongside branch protection rather than instead of it: the
+    # two fail independently. Branch protection stops an unreviewed merge;
+    # this stops a publish however the job was reached. Neither covers the
+    # other's gap.
+    environment: ghcr-publish
+
     permissions:
       contents: read
       packages: write

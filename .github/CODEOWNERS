@@ -1,0 +1,36 @@
+# Review gate for the paths that can publish to GHCR.
+#
+# These globs are deliberately THE SAME SET as the `paths:` filter on the
+# `push: branches: [main]` trigger in .github/workflows/build-nautobot.yml.
+# A change that can cause a publish is a change that needs a review, and
+# keeping the two lists identical is what makes that sentence true rather
+# than aspirational. If you add a path to one, add it to the other.
+#
+# This file is only half the control. It names who must approve; it does not
+# require the approval. That comes from a ruleset on `main` with "Require
+# review from Code Owners" enabled. Without it, this file is documentation.
+#
+# ⚠️ WHY INDIVIDUALS AND NOT @Frisian-MCP/core-maintainers
+#
+# A team that has no access to this repository is IGNORED in CODEOWNERS --
+# silently. No error on the PR, no owner assigned, and the "require Code
+# Owner review" rule finds nobody to require. Measured 2026-08-25:
+#
+#     gh api /repos/Frisian-MCP/frisian-mcp-demo/teams  ->  (empty)
+#
+# The five people below reach the repo through the organisation's base
+# permission, not through a team grant, so a team entry here would name a
+# group that does not formally have access and would be dropped.
+#
+# To switch to the team -- worth doing, because a roster in a file goes stale
+# -- grant @Frisian-MCP/core-maintainers write on this repository FIRST, then
+# replace the handles below with @Frisian-MCP/core-maintainers, and confirm
+# with:
+#
+#     gh api /repos/Frisian-MCP/frisian-mcp-demo/codeowners/errors
+#
+# That endpoint is the check. Do not switch and assume.
+
+/.github/workflows/  @Jeremy-Friese @drewelliott @DarthTink @PineapppleBun @SquidwardMatrix
+/nautobot/           @Jeremy-Friese @drewelliott @DarthTink @PineapppleBun @SquidwardMatrix
+/common/             @Jeremy-Friese @drewelliott @DarthTink @PineapppleBun @SquidwardMatrix
