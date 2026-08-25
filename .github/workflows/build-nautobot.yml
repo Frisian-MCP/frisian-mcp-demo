@@ -42,13 +42,13 @@ on:
         default: ""
         type: string
       lane:
-        description: "Where frisian-mcp comes from. Only 'release' may publish to GHCR."
+        description: "Where frisian-mcp comes from. 'rehearsal' publishes only under a -pre/-rc tag; 'release' only under a plain one; 'testpypi' never publishes."
         required: false
         default: rehearsal
         type: choice
         options: [rehearsal, testpypi, release]
       publish:
-        description: "Push to GHCR. Unchecked = build and verify only. Ignored unless lane=release."
+        description: "Push to GHCR. Unchecked = build and verify only. Honoured on rehearsal AND release; the publish gate decides whether the lane and tag agree."
         required: false
         default: false
         type: boolean
@@ -122,8 +122,14 @@ jobs:
           else
             tag="${{ github.event.inputs.demo_tag }}"
             publish="${{ github.event.inputs.publish }}"
-            # Defaults to `rehearsal`, the lane that cannot publish. A missing
-            # or unrecognised value must not fall through to the one that can.
+            # Defaults to `rehearsal`, the most constrained lane: it can
+            # publish, but only under a -pre/-rc tag. A missing or
+            # unrecognised value must not fall through to `release`, which
+            # publishes under a plain tag and makes a promise about the
+            # package. This said "the lane that cannot publish" until the
+            # tag-honesty rule replaced the release-only gate, and `publish`
+            # has never been filtered by lane here -- it is passed straight
+            # through and the gate below is what decides.
             lane="${{ github.event.inputs.lane }}"
             lane="${lane:-rehearsal}"
           fi
