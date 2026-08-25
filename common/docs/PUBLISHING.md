@@ -32,8 +32,10 @@ tag.
 
 Where `frisian-mcp` comes from is a separate axis from which tag gets built.
 The workflow's `lane` input carries it, and it defaults to `rehearsal` — the
-lane that cannot publish — so a missing or unrecognised value never falls
-through to the one that can.
+most constrained lane that can still publish, and only ever under a `-pre` /
+`-rc` tag — so a missing or unrecognised value never falls through to
+`release`, which publishes under a plain tag and makes a promise about the
+package.
 
 | lane | source | validates | may publish |
 |---|---|---|---|
@@ -89,9 +91,16 @@ published image. Folding the flags into the spec to make Test PyPI work would
 mean widening the one check standing between GHCR and a wheel from anywhere.
 Do not do it.
 
-The gate refuses a publish when the lane is not `release`, **and** independently
-when any index override is set — the second is redundant while the first holds,
-which is the point.
+The index is **derived from the lane** in `resolve`, not supplied by the
+operator: only `testpypi` gets one, every other lane gets the empty string,
+and `testpypi` cannot publish. The `release` branch of the publish gate then
+refuses independently if an override is set at all.
+
+That second check is redundant while the derivation holds, which is the point
+— it is the one that survives someone later making the index an input. Note
+what it does **not** cover: the rehearsal lane has no index check, and does
+not need one only because the derivation above leaves it empty. If an index
+input is ever added, that gap opens with it.
 
 ### The lane must actually be wired
 
@@ -197,25 +206,110 @@ lockstep tag exists to prevent.
 
 ---
 
-## First publish — the manual step everyone forgets
+## First publish — visibility and write are TWO controls
 
-**GHCR package visibility is NOT inherited from repository visibility.**
+**GHCR package visibility is NOT inherited from repository visibility**, and
+the app and db images are **two separate packages** with independent settings.
+Flipping or checking one says nothing about the other.
 
-A public repo publishing its first image produces a **private** package. The
-push succeeds, CI is green, and every user gets `denied` or `not found` on
-pull. It is a day-one incident that looks like a broken image.
+### The demo packages stay PRIVATE
 
-After the first successful publish, **once per package**:
+Ruled by Jeremy, 2026-08-24:
+
+> *"In GHCR it needs to be read-only for everyone and only writeable for
+> approved people, so people are not pushing garbage into our registry. For
+> now it should be closed until we have done our own testing."*
+
+**This section used to say to flip both packages public at first publish.**
+That guidance is superseded, not merely out of date — following it now
+publishes an untested demo. A private package is also the default a push
+produces, so the correct first-publish action is to *confirm* private rather
+than to change anything.
+
+### Visibility does not restrict writing, and never did
+
+This is the conflation worth not repeating. A **public** GHCR package is
+already read-only to the world — there is no anonymous push. So *"read-only
+for everyone"* comes free with visibility and always did.
+
+*"Writeable only by approved people"* is a **separate control**, unaffected by
+visibility, and it is the one that actually needs configuring. Staying private
+closes **reads**. It does not touch the garbage-push risk at all.
+
+### Every write path, and what closes it
+
+Enumerate them. A single-door assumption is how this repo's other gaps
+happened.
+
+| # | write path | closed by | auditable from here? |
+|---|---|---|---|
+| 1 | explicit package role assignments (read/write/admin) | grant deliberately, per person or team | **no** — no enumerating API for container packages; UI only |
+| 2 | **inherited repository access** — repo write becoming package write | turn inheritance off; grant explicitly instead | yes, via the package's `repository` field |
+| 3 | workflow `GITHUB_TOKEN` with `packages: write` | scoped by who can trigger the workflow | yes — read the workflow |
+| 4 | PATs carrying `write:packages` | per-person hygiene | **no** — auditable only per account |
+
+Paths 1 and 4 have no API that lists them. Record what you **see** in the UI,
+not what the default ought to be.
+
+### Measured on the nautobot pair, 2026-08-25
+
+```
+gh api '/orgs/Frisian-MCP/packages?package_type=container'
+  demo-nautobot      visibility=private
+  demo-nautobot-db   visibility=private
+
+anonymous pull token: GET https://ghcr.io/token?scope=repository:<pkg>:pull
+  frisian-mcp/demo-nautobot        401   refused — exists, private
+  frisian-mcp/demo-nautobot-db     401   refused — exists, private
+  homebrew/core/git                200   control — a public package still works
+  frisian-mcp/no-such-package-xyz  403   control — a wrong name looks different
+
+gh api '/orgs/Frisian-MCP/packages/container/demo-nautobot'     → repository: null
+gh api '/orgs/Frisian-MCP/packages/container/demo-nautobot-db'  → repository: null
+```
+
+Both controls are load-bearing. The API call and the token call are also
+independent of each other: the first reports the *setting*, the second reports
+what a stranger actually experiences, and only the second would catch a
+setting that reads Private while behaving otherwise.
+
+### ⚠️ The repository link, and why path 2 and path 3 are one action
+
+Neither package is linked to `frisian-mcp-demo`, **despite both carrying
+`org.opencontainers.image.source`**. The OCI label does not create the GHCR
+link: a CLI `docker push` does not link, a workflow push does.
+
+So inheritance is currently **shut** — but by accident of how the first
+publish was run, not by configuration, and not durably.
+
+The consequence is the part to carry: **`packages: write` in the `publish` job
+cannot reach these packages until that link exists.** Making CI publishing
+work therefore *creates* the inheritance path in the same motion. They are one
+action, not two. Whoever eventually fixes "CI cannot push" also hands package
+write to every collaborator with repo write, unless they turn inheritance off
+in the same step.
+
+Do not read "CI cannot currently push" as a security control. It is an
+unconfigured state that the first person to need CI will remove.
+
+### At first publish, then, once per package
 
 1. https://github.com/orgs/Frisian-MCP/packages
 2. Open `demo-<host>` → **Package settings**
-3. **Danger Zone** → **Change visibility** → **Public**
-4. Repeat for `demo-<host>-db` — it is a **separate package** with its own
-   visibility setting. Flipping one does not flip the other, and missing the
-   db package produces a demo that pulls the app and then fails on the
-   database with a confusing permissions error.
-5. Under **Manage Actions access**, confirm the repository has `write`, so
-   later runs can push without a PAT.
+3. **Confirm visibility reads Private.** Do not flip it.
+4. **Manage access** — restrict write to approved people. This is the standing
+   policy, and it survives any later flip to public.
+5. Repeat for `demo-<host>-db`, and confirm it independently. Missing the db
+   package produces a demo that pulls the app and then fails on the database
+   with a confusing permissions error.
+
+### When they do go public later
+
+Only after Jeremy says our own testing is done. Flipping visibility does
+**not** restrict writes and does not need to — path 1, 2 and 4 above are
+exactly as open or closed as they were the day before. Re-verify write access
+after the flip anyway, because that is the moment a mistake becomes reachable
+by strangers.
 
 Both packages, every host. Then verify from clean, below.
 
@@ -233,10 +327,50 @@ On a machine with **no local cache** for these images:
 docker image rm ghcr.io/frisian-mcp/demo-<host>:<tag> \
                 ghcr.io/frisian-mcp/demo-<host>-db:<tag> 2>/dev/null || true
 
-# 2. Anonymous pull — logged out, exactly like a stranger
+# 2. Anonymous pull — exactly like a stranger.
+#
+#    ⚠️ WHILE THE PACKAGES ARE PRIVATE THIS CHECK IS INVERTED:
+#    both pulls MUST FAIL. A private package a stranger CAN pull is the
+#    failure the policy exists to prevent, and it is invisible from an
+#    authenticated machine. Once public, both must SUCCEED.
 docker logout ghcr.io
 docker pull ghcr.io/frisian-mcp/demo-<host>:<tag>
 docker pull ghcr.io/frisian-mcp/demo-<host>-db:<tag>
+
+#    Same verdict without touching your credential store: ask GHCR for an
+#    ANONYMOUS PULL TOKEN. It answers three ways, which is the reason to
+#    prefer it -- see the trap below.
+#
+#        200  public          -- a token was issued
+#        401  exists, PRIVATE -- refused outright   (expected today)
+#        403  NO SUCH PACKAGE -- you are checking a name that isn't there
+#
+for pkg in frisian-mcp/demo-<host> frisian-mcp/demo-<host>-db homebrew/core/git; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' \
+    "https://ghcr.io/token?scope=repository:${pkg}:pull&service=ghcr.io")
+  echo "${pkg}  token-endpoint HTTP ${code}"
+done
+#
+#    Keep the public control in the loop. Without it, a 401 on every line
+#    could equally mean "correctly private" or "the whole check is broken",
+#    and those are indistinguishable from the output alone.
+#
+#    Measured 2026-08-25:
+#        frisian-mcp/demo-nautobot        401
+#        frisian-mcp/demo-nautobot-db     401
+#        homebrew/core/git                200   <- control
+#        frisian-mcp/no-such-package-xyz  403   <- the trap, below
+#
+#    ⚠️ THE TRAP. The obvious alternative -- request the MANIFEST with no
+#    bearer and expect a refusal -- returns 403 for a private package AND 403
+#    for a package that does not exist. A typo in the package name therefore
+#    reads as a pass, and you would have "verified" nothing at all. The
+#    refusal to ISSUE A TOKEN is the check; the manifest failure is only its
+#    downstream symptom, and it discards the distinction that matters.
+
+# 2b. Then pull as an APPROVED account and confirm both succeed. Neither half
+#     substitutes for the other: step 2 proves strangers are shut out, this
+#     proves the people who should have access actually do.
 
 # 3. Both architectures really are in the manifest list
 docker buildx imagetools inspect ghcr.io/frisian-mcp/demo-<host>:<tag>
@@ -255,6 +389,11 @@ cd /tmp/demo-verify/<host> && docker compose up
 Step 2 is the one people skip. Publishing from an account that can already
 pull private packages hides a visibility mistake completely — the push
 succeeded and *you* can pull, so everything looks fine. Log out.
+
+Note which direction you are checking. The same command is a pass at 403 and a
+pass at 200 depending on the ruling in force, so "the pull behaved as I
+expected" is not a result unless you wrote down which outcome you expected
+first.
 
 Step 5 is the acceptance test. The others explain a failure; this one decides
 whether the demo works.
@@ -317,7 +456,13 @@ Published tags are immutable, so rollback is "tell people the older tag":
 - [ ] Workflow triggered by Jeremy with the intended `DEMO_TAG`
 - [ ] Both images pushed in the same run, same tag
 - [ ] Manifest check in the workflow passed for both images, both arches
-- [ ] Package visibility set to public — **both** packages (first publish only)
-- [ ] Verified from clean, logged out, on both an amd64 and an arm64 machine
+- [ ] **Both** packages confirmed **Private** — checked individually, not inferred
+      from the repo or from each other (see the ruling above; do NOT flip public)
+- [ ] Write restricted to approved people, all four paths walked — and the
+      package `repository` field checked, because CI publishing and inherited
+      repo access arrive together
+- [ ] Anonymous pull verified to **FAIL** on both packages while private
+- [ ] Approved-account pull verified to succeed on both
+- [ ] Verified from clean on both an amd64 and an arm64 machine
 - [ ] Fresh-clone `docker compose up` reaches a working demo
 - [ ] README names the new tag
