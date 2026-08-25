@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "nautobot-read-only": {
+      "type": "http",
+      "url": "http://127.0.0.1:8080/mcp/read-only",
+      "headers": {
+        "Authorization": "Bearer frisian-demo-readonly-token-public-do-not-reuse"
+      }
+    },
+    "nautobot-read-write": {
+      "type": "http",
+      "url": "http://127.0.0.1:8080/mcp/read-write",
+      "headers": {
+        "Authorization": "Bearer frisian-demo-netops-token-public-do-not-reuse"
+      }
+    },
+    "nautobot-admin": {
+      "type": "http",
+      "url": "http://127.0.0.1:8080/mcp/admin",
+      "headers": {
+        "Authorization": "Bearer frisian-demo-admin-token-public-do-not-reuse"
+      }
+    }
+  }
+}
