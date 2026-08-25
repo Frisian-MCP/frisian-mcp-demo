@@ -244,7 +244,7 @@ happened.
 | # | write path | closed by | auditable from here? |
 |---|---|---|---|
 | 1 | explicit package role assignments (read/write/admin) | grant deliberately, per person or team | **no** — no enumerating API for container packages; UI only |
-| 2 | **inherited repository access** — repo write becoming package write | turn inheritance off; grant explicitly instead | yes, via the package's `repository` field |
+| 2 | **repository access via Actions** — a repo's `GITHUB_TOKEN` gaining package write | remove the repo, or set its role to Read, under **Manage Actions access** | **no** — see the trap below; the API's `repository` field does NOT report this |
 | 3 | workflow `GITHUB_TOKEN` with `packages: write` | scoped by who can trigger the workflow | yes — read the workflow |
 | 4 | PATs carrying `write:packages` | per-person hygiene | **no** — auditable only per account |
 
@@ -266,31 +266,63 @@ anonymous pull token: GET https://ghcr.io/token?scope=repository:<pkg>:pull
 
 gh api '/orgs/Frisian-MCP/packages/container/demo-nautobot'     → repository: null
 gh api '/orgs/Frisian-MCP/packages/container/demo-nautobot-db'  → repository: null
+    ⚠️ THIS FIELD ANSWERS A DIFFERENT QUESTION — see below. It read null
+       while the UI showed frisian-mcp-demo holding Role: Write.
 ```
 
-Both controls are load-bearing. The API call and the token call are also
-independent of each other: the first reports the *setting*, the second reports
-what a stranger actually experiences, and only the second would catch a
-setting that reads Private while behaving otherwise.
+Both controls on the token call are load-bearing, and the two calls are
+independent of each other: `gh api` reports the *setting*, the token endpoint
+reports what a stranger actually experiences, and only the second would catch
+a setting that reads Private while behaving otherwise.
 
-### ⚠️ The repository link, and why path 2 and path 3 are one action
+### ⚠️ The `repository` field does not answer the question it looks like it answers
 
-Neither package is linked to `frisian-mcp-demo`, **despite both carrying
-`org.opencontainers.image.source`**. The OCI label does not create the GHCR
-link: a CLI `docker push` does not link, a workflow push does.
+**Do not audit path 2 with `gh api`.** Measured 2026-08-25 on the shipped pair:
 
-So inheritance is currently **shut** — but by accident of how the first
-publish was run, not by configuration, and not durably.
+```
+gh api '/orgs/Frisian-MCP/packages/container/demo-nautobot' → repository: null
 
-The consequence is the part to carry: **`packages: write` in the `publish` job
-cannot reach these packages until that link exists.** Making CI publishing
-work therefore *creates* the inheritance path in the same motion. They are one
-action, not two. Whoever eventually fixes "CI cannot push" also hands package
-write to every collaborator with repo write, unless they turn inheritance off
-in the same step.
+Package settings → Manage Actions access:
+  frisian-mcp-demo                                          → Role: WRITE
+```
 
-Do not read "CI cannot currently push" as a security control. It is an
-unconfigured state that the first person to need CI will remove.
+Both, at the same moment, on the same package. `repository` is the **display
+link** — the association a workflow publish creates, which a CLI `docker push`
+does not, and which the `org.opencontainers.image.source` label does not
+create either. **Actions access is a separate grant that the field never
+reports.** A package can read `repository: null` and still hand a repository's
+`GITHUB_TOKEN` write access to its contents.
+
+This was written the wrong way round in this runbook for one commit, on the
+strength of that null: *"CI cannot push until the link exists."* It could push
+the whole time. The field answered its own question correctly and it was not
+the question being asked.
+
+**Manage Actions access is the only place that reports it, and it is
+per-package.** Read it in the UI, on both packages, every time.
+
+### Why this grant is the widest door
+
+A repository at `Role: Write` means anyone who can trigger a workflow in that
+repo can publish. Check the org's `default_repository_permission` before
+deciding who that is:
+
+```
+gh api /orgs/Frisian-MCP → default_repository_permission = write
+```
+
+At `write`, **every org member — current and future — has repo write, so the
+Actions grant reaches all of them**, including people deliberately left out of
+a team on the Manage access list below. The narrower per-team grant does not
+constrain it; the two lists are independent, and access is the union.
+
+Publishing is manual today (`publish.sh` from a machine that has the wheel and
+the golden dump), so the Actions grant buys nothing that is currently used.
+**Set it to Read, or remove the repository, until CI publishing is actually
+wanted.** If it is wanted later, put the `publish` job behind a protected
+GitHub **Environment** with required reviewers — that restricts who can
+trigger a publish independently of who holds repo write, which is the only
+thing that makes the grant safe at this org default.
 
 ### At first publish, then, once per package
 
@@ -458,9 +490,9 @@ Published tags are immutable, so rollback is "tell people the older tag":
 - [ ] Manifest check in the workflow passed for both images, both arches
 - [ ] **Both** packages confirmed **Private** — checked individually, not inferred
       from the repo or from each other (see the ruling above; do NOT flip public)
-- [ ] Write restricted to approved people, all four paths walked — and the
-      package `repository` field checked, because CI publishing and inherited
-      repo access arrive together
+- [ ] Write restricted to approved people, all four paths walked — including
+      **Manage Actions access read in the UI on both packages**, because the
+      API's `repository` field does not report it
 - [ ] Anonymous pull verified to **FAIL** on both packages while private
 - [ ] Approved-account pull verified to succeed on both
 - [ ] Verified from clean on both an amd64 and an arm64 machine
