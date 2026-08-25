@@ -28,7 +28,7 @@ SAFETY
     warned about — it is simply never read. Measured on 1.0.12:
 
       * the three doors below are never mounted; /mcp/read-only,
-        /mcp/read-write and /mcp/admin all return 404
+        /mcp/read-write and /mcp/ops all return 404
       * everything collapses onto the package's default /mcp/ mount
       * allow_list and deny_list therefore carve NOTHING, and a read-tier
         token was observed invoking extras -> secret and
@@ -391,8 +391,23 @@ FRISIAN_MCP_ROUTES = {
     },
     # Full surface, full tier. What the scoped doors made absent is present
     # here — that contrast is the demonstration.
+    #
+    # ⚠️ THE PATH IS `mcp/ops`, NOT `mcp/admin`, AND THAT IS NOT COSMETIC.
+    #
+    # An MCP client connecting to `/mcp/admin` STRIPS THE SUFFIX and retries
+    # the bare URL, so the caller lands on a different route and authenticates
+    # against the read-write tier instead. The admin door is silently absorbed
+    # by the write path — it resolves, it answers, and it answers with the
+    # wrong ceiling. Nothing on the wire says the route you asked for is not
+    # the route you got.
+    #
+    # The route KEY and `highest_tier` are still "admin"; only the URL segment
+    # changed, because the URL is the only part the client rewrites.
+    #
+    # Do not rename this back for tidiness. Same reason the server entries in
+    # .mcp.json / .cursor/mcp.json / .codex/config.toml are `nautobot-ops`.
     "admin": {
-        "path": "mcp/admin",
+        "path": "mcp/ops",
         "highest_tier": "admin",
         "allow_list": ["*"],
     },

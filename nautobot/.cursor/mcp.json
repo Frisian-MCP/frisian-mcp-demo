@@ -14,9 +14,9 @@
         "Authorization": "Bearer frisian-demo-netops-token-public-do-not-reuse"
       }
     },
-    "nautobot-admin": {
+    "nautobot-ops": {
       "type": "http",
-      "url": "http://127.0.0.1:8080/mcp/admin",
+      "url": "http://127.0.0.1:8080/mcp/ops",
       "headers": {
         "Authorization": "Bearer frisian-demo-admin-token-public-do-not-reuse"
       }

@@ -16,7 +16,7 @@ whose Django permissions are NARROWER than the door it connects through.
 
     demo-readonly   read        mcp/read-only    view on the scoped estate
     demo-netops     read_write  mcp/read-write   view on all; write dcim+ipam ONLY
-    demo-admin      admin       mcp/admin        superuser
+    demo-admin      admin       mcp/ops        superuser
 
 `demo-netops` is the interesting one. Its door allows the write tier across all
 thirteen scoped resources; its ObjectPermissions allow writes to two of them.

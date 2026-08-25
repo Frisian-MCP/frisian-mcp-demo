@@ -61,7 +61,7 @@ different authority, against one server:
 |---|---|---|---|
 | `demo-readonly` | `mcp/read-only` | `read` | nothing |
 | `demo-netops` | `mcp/read-write` | `read_write` | `dcim` and `ipam` only |
-| `demo-admin` | `mcp/admin` | `admin` | everything |
+| `demo-admin` | `mcp/ops` | `admin` | everything |
 
 Ask one dispatcher what it will let you do, as `demo-netops`, on the door that
 permits the write tier across every group:

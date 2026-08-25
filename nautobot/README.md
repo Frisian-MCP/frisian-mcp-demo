@@ -113,7 +113,7 @@ published constants — reproducible in every build, and not secrets.
 |---|---|---|---|
 | `demo-readonly` | `mcp/read-only` | `read` | `view` on the scoped estate |
 | `demo-netops` | `mcp/read-write` | `read_write` | `view` on all scoped apps; **write on `dcim` and `ipam` only** |
-| `demo-admin` | `mcp/admin` | `admin` | superuser |
+| `demo-admin` | `mcp/ops` | `admin` | superuser |
 
 ```text
 demo-readonly   Bearer frisian-demo-readonly-token-public-do-not-reuse
@@ -244,7 +244,7 @@ the job catalogue browsable. Credential material is absent from both.
 ### 4. What the scoped doors hide is really there
 
 ```bash
-TOKEN="frisian-demo-admin-token-public-do-not-reuse" ROUTE="mcp/admin" \
+TOKEN="frisian-demo-admin-token-public-do-not-reuse" ROUTE="mcp/ops" \
   ../common/mcp-clients/curl-tools-list.sh
 ```
 

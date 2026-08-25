@@ -48,7 +48,7 @@ Each file declares three servers, one per door:
 ```
 nautobot-read-only    http://127.0.0.1:8080/mcp/read-only
 nautobot-read-write   http://127.0.0.1:8080/mcp/read-write
-nautobot-admin        http://127.0.0.1:8080/mcp/admin
+nautobot-ops        http://127.0.0.1:8080/mcp/ops
 ```
 
 Connecting all three at once is fine, but it is why `.env` sets
@@ -78,9 +78,9 @@ Claude Desktop and most others — paste this:
         "Authorization": "Bearer frisian-demo-netops-token-public-do-not-reuse"
       }
     },
-    "nautobot-admin": {
+    "nautobot-ops": {
       "type": "http",
-      "url": "http://127.0.0.1:8080/mcp/admin",
+      "url": "http://127.0.0.1:8080/mcp/ops",
       "headers": {
         "Authorization": "Bearer frisian-demo-admin-token-public-do-not-reuse"
       }
@@ -102,7 +102,7 @@ point of the demo.
 |---|---|---|---|---|
 | `demo-readonly` | `frisian-demo-public-password` | `/mcp/read-only` | `read` | `view` on the scoped estate |
 | `demo-netops` | `frisian-demo-public-password` | `/mcp/read-write` | `read_write` | `view` on all scoped apps; **write on `dcim` and `ipam` only** |
-| `demo-admin` | `frisian-demo-public-password` | `/mcp/admin` | `admin` | superuser — bypasses per-object permissions |
+| `demo-admin` | `frisian-demo-public-password` | `/mcp/ops` | `admin` | superuser — bypasses per-object permissions |
 
 | | read the estate | write `dcim`/`ipam` | write `dns`, `circuits`, `bgp`… | `users`, `vpn`, secrets |
 |---|---|---|---|---|
