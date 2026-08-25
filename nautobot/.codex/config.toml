@@ -1,0 +1,24 @@
+# Codex reads ~/.codex/config.toml by default, NOT this file.
+# Point CODEX_HOME at this directory to use it:
+#
+#     cd nautobot && CODEX_HOME="$PWD/.codex" codex
+#
+# Every credential below is a published demo constant. Do not reuse them.
+
+[mcp_servers.nautobot-read-only]
+url = "http://127.0.0.1:8080/mcp/read-only"
+
+[mcp_servers.nautobot-read-only.http_headers]
+Authorization = "Bearer frisian-demo-readonly-token-public-do-not-reuse"
+
+[mcp_servers.nautobot-read-write]
+url = "http://127.0.0.1:8080/mcp/read-write"
+
+[mcp_servers.nautobot-read-write.http_headers]
+Authorization = "Bearer frisian-demo-netops-token-public-do-not-reuse"
+
+[mcp_servers.nautobot-admin]
+url = "http://127.0.0.1:8080/mcp/admin"
+
+[mcp_servers.nautobot-admin.http_headers]
+Authorization = "Bearer frisian-demo-admin-token-public-do-not-reuse"

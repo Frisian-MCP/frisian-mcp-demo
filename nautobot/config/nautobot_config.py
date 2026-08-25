@@ -214,48 +214,6 @@ if _HEAVY_CACHE_URL:
     }
     FRISIAN_MCP_HEAVY_CACHE_ALIAS = _HEAVY_CACHE_ALIAS
 
-# ---------------------------------------------------------------------------
-# The getting-started page.
-#
-# docker-compose.yml mounts ./web at /opt/demo-static; adding it here is what
-# makes `collectstatic` copy it into the static root at boot, so the page is
-# served at /static/getting-started.html with no web server and no container.
-#
-# Appended rather than assigned: Nautobot core sets STATICFILES_DIRS to its
-# own project-static directory, and replacing it loses every built-in asset.
-# ---------------------------------------------------------------------------
-STATICFILES_DIRS = tuple(STATICFILES_DIRS) + ("/opt/demo-static",)  # noqa: F405
-
-# ---------------------------------------------------------------------------
-# Banners — the demo telling you how to use it, on the page where you need it.
-#
-# BANNER_LOGIN renders MARKDOWN on the login form (nautobot/core/templates/
-# login.html: `{{ "BANNER_LOGIN"|settings_or_config|render_markdown }}`), so
-# the credentials are visible at the moment someone is being asked for them.
-#
-# This exists because the demo failed its own first-run test: the password is
-# published in the README and in a static page, and neither is on screen when
-# a browser autofills a saved Nautobot password and Django blanks the field.
-# Publishing a credential is not the same as putting it where it is needed.
-#
-# Everything here is public by design. The safety property is the loopback
-# bind, not secrecy.
-# ---------------------------------------------------------------------------
-BANNER_LOGIN = (
-    "**Demo credentials** — published on purpose, and this stack is bound to loopback.\n\n"
-    "Sign in as `demo-admin`, `demo-netops` or `demo-readonly`, "
-    "password `frisian-demo-public-password`.\n\n"
-    "If your browser autofills a saved password the login fails silently — paste it, "
-    "or use a private window.\n\n"
-    "[Getting started: tokens, tiers, and what each account can do]"
-    "(/static/getting-started.html)"
-)
-
-BANNER_TOP = (
-    "frisian-mcp demo — published credentials, loopback only. "
-    "[Getting started](/static/getting-started.html)"
-)
-
 # Off by default — a demo should not phone home from someone's laptop.
 INSTALLATION_METRICS_ENABLED = is_truthy(
     os.getenv("NAUTOBOT_INSTALLATION_METRICS_ENABLED", "False")
