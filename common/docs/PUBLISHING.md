@@ -206,6 +206,85 @@ lockstep tag exists to prevent.
 
 ---
 
+## How a publish is reached at all
+
+There are exactly two paths, and they are for different things.
+
+### 1. A merge to `main` — this is the one that publishes
+
+The workflow triggers on `push: branches: [main]` filtered to `nautobot/**`,
+`common/**` and its own file. Nothing about the build comes from an operator:
+
+| value | comes from |
+|---|---|
+| the tag | `DEMO_TAG` in the merged tree's `nautobot/.env` |
+| the frisian-mcp source | the `FRISIAN_MCP_SPEC` repository variable |
+| the lane | always `release` — CI has no wheel, so it cannot rehearse |
+
+**What publishes is what a reviewer approved**, rather than what someone typed
+into a form afterwards. That is the whole reason the inputs went away.
+
+Four controls stand between a change and GHCR. They fail independently, which
+is the point — no one of them is load-bearing alone:
+
+1. **A ruleset on `main`** requiring a PR and a Code Owner approval
+2. **`.github/CODEOWNERS`**, whose globs are the same set as the trigger's
+   `paths:` filter — a change that can publish is a change that needs review
+3. **A protected Environment**, `ghcr-publish`, with required reviewers — this
+   one gates the *job*, so it holds however the job was reached
+4. **The overwrite guard** in `resolve`, which asks the registry whether the
+   tag already exists and refuses rather than republishing it
+
+### ⚠️ Three of those four are settings, not code, and this file cannot prove them
+
+The workflow and CODEOWNERS are in the repo and reviewable. The ruleset and
+the environment's reviewer list are not, and **a workflow cannot check either
+for itself** — `GITHUB_TOKEN` has no permission that reads environment
+protection rules.
+
+Worse, the environment fails *open* if unconfigured: naming an environment
+that does not exist **auto-creates it with no protection rules**, and the job
+runs straight through. So `environment: ghcr-publish` appearing in the
+workflow is not evidence that anyone approves anything. Read it:
+
+```
+Settings → Environments → ghcr-publish → Required reviewers
+Settings → Rules → the ruleset on main → Require review from Code Owners
+gh api /repos/Frisian-MCP/frisian-mcp-demo/codeowners/errors   # must be empty
+```
+
+Or watch a run actually pause for approval. That is the only self-evidencing
+one of the three.
+
+### 2. `publish.sh` on a machine that has the artifacts — rehearsals
+
+```bash
+cd nautobot && ./publish.sh --push
+```
+
+Publishes the **rehearsal** lane under a `-pre` tag, from a local wheel and
+the golden dump, both of which are gitignored and therefore absent from CI.
+This is how `v0.1.0-pre` was published. It bypasses every control above by
+construction — it is a person with a credential and a shell — so it is
+restricted by who holds a `write:packages` token, and nothing else.
+
+`workflow_dispatch` remains, but **cannot publish on any lane**. It builds and
+verifies. Branch protection governs merges, so a dispatch publish walked
+straight around the review gate: anyone able to trigger a workflow could push
+to GHCR without a PR, and at an org default repository permission of `write`
+that is every member.
+
+### What still has to be set before a merge can publish
+
+- `FRISIAN_MCP_SPEC` repository variable. While unset, a merge builds and
+  verifies and publishes nothing, with a notice rather than a failure — a
+  check that always fails is one everyone learns to ignore.
+- The ruleset, and the environment's reviewers.
+- `DEMO_TAG` bumped past whatever is already published. The guard refuses the
+  current pin: measured 2026-08-25, both packages already carry `v0.1.0-pre`.
+
+---
+
 ## First publish — visibility and write are TWO controls
 
 **GHCR package visibility is NOT inherited from repository visibility**, and
@@ -316,13 +395,14 @@ Actions grant reaches all of them**, including people deliberately left out of
 a team on the Manage access list below. The narrower per-team grant does not
 constrain it; the two lists are independent, and access is the union.
 
-Publishing is manual today (`publish.sh` from a machine that has the wheel and
-the golden dump), so the Actions grant buys nothing that is currently used.
-**Set it to Read, or remove the repository, until CI publishing is actually
-wanted.** If it is wanted later, put the `publish` job behind a protected
-GitHub **Environment** with required reviewers — that restricts who can
-trigger a publish independently of who holds repo write, which is the only
-thing that makes the grant safe at this org default.
+**Keep this grant at Write.** CI publishing is the intended flow (below), and
+it needs it. The grant is not the control; **who can merge to `main`** is, and
+the workflow was reshaped so that publishing is only reachable that way.
+
+What makes the grant safe is that every path to the publish job now passes
+through a review: `workflow_dispatch` lost its `publish` input, the
+`nautobot-v*` tag trigger was removed, and the job sits behind a protected
+Environment. Remove any one of those and the Actions grant is a door again.
 
 ### At first publish, then, once per package
 
@@ -485,7 +565,14 @@ Published tags are immutable, so rollback is "tell people the older tag":
 
 ## Checklist
 
-- [ ] Workflow triggered by Jeremy with the intended `DEMO_TAG`
+- [ ] `DEMO_TAG` in `nautobot/.env` bumped past every published tag
+- [ ] Ruleset on `main` requires a PR **and** Code Owner review
+- [ ] `gh api /repos/.../codeowners/errors` returns empty — a team or handle
+      without repo access is dropped silently, so an unread CODEOWNERS file
+      looks exactly like a satisfied one
+- [ ] Environment `ghcr-publish` has **required reviewers** — it auto-creates
+      unprotected, so the workflow naming it proves nothing
+- [ ] `FRISIAN_MCP_SPEC` repository variable set to a released pin
 - [ ] Both images pushed in the same run, same tag
 - [ ] Manifest check in the workflow passed for both images, both arches
 - [ ] **Both** packages confirmed **Private** — checked individually, not inferred
