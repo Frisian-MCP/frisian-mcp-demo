@@ -51,6 +51,13 @@ nautobot-read-write   http://127.0.0.1:8080/mcp/read-write
 nautobot-admin        http://127.0.0.1:8080/mcp/admin
 ```
 
+Connecting all three at once is fine, but it is why `.env` sets
+`NAUTOBOT_UWSGI_PROCESSES=8`. Each connected MCP server holds one uWSGI worker
+open for as long as it stays connected — the transport keeps a long-lived
+`GET /mcp/<door>` stream — and Nautobot's default of 3 workers means three
+connected doors serve nothing at all, including the web UI. If you see one
+server stuck on "failed" while the others connect, that is the symptom.
+
 For a GUI client that takes JSON in its own settings rather than a repo file —
 Claude Desktop and most others — paste this:
 
