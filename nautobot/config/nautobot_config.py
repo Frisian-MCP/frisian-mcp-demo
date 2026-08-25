@@ -173,11 +173,23 @@ CACHES = {
 # frisian_mcp.W016 warns that continuation entries default to the SAME cache
 # that holds OAuth authorization codes and the token-endpoint rate counter, so
 # flooding one evicts the others — and the rate limiter fails OPEN when its
-# cache is unavailable. Its hint is explicit that a second logical Redis DB is
-# NOT sufficient, because logical DBs share one instance's memory budget.
+# cache is unavailable. Continuation entries are attacker-amplifiable: an
+# unauthenticated caller can mint them.
 #
-# So this points at a SEPARATE Redis instance with its own eviction budget
-# (see the `redis-heavy` service in docker-compose.yml).
+# ⚠️ THIS DEMO USES LOGICAL DB 2 ON THE ONE REDIS, AND THAT IS NOT ISOLATION.
+#
+# Read W016's own text before "fixing" this. It says absence of the warning is
+# NOT proof of isolation, because two aliases on different logical DBs of one
+# instance have distinct LOCATION strings and still share that instance's
+# memory. The requirement is an independent eviction BUDGET, which settings
+# alone cannot express.
+#
+# So the check below will pass, and its passing means nothing for this
+# property. That is a deliberate trade, made 2026-08-25: the demo matches a
+# stock Nautobot deployment's one-Redis shape, and it binds to loopback with
+# credentials that are published anyway. A production host wanting the real
+# property needs a SECOND REDIS INSTANCE, not a different DB index — that is
+# what the deployed reference does and what a real deployment should copy.
 #
 # ⚠️ THE ALIAS AND THE CACHE ARE SET TOGETHER, ON PURPOSE. Naming an alias that
 # CACHES does not define is frisian_mcp.E009 — an ERROR, not a warning — and

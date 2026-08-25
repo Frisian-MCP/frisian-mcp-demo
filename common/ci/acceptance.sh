@@ -139,10 +139,14 @@ fi
 # Severity convention (frisian-mcp checks.py): Warning = config hygiene,
 # Error = indeterminate security metadata on a dispatcher. An E00x is a stop.
 #
-# The warning baseline is ZERO and is asserted by NAME, not by count. The
-# W016 heavy-cache warning was closed by pointing FRISIAN_MCP_HEAVY_CACHE_URL
-# at a dedicated redis-heavy service; a config that regresses that must fail
-# here rather than pass with a warning nobody reads. If a warning is ever
+# The warning baseline is ZERO and is asserted by NAME, not by count.
+#
+# ⚠️ W016 is the one to distrust. It is silent here because the heavy cache
+# has a different LOCATION from `default` (logical DB 2 vs 1 on the ONE
+# redis), and W016's own text says that absence is NOT proof of isolation:
+# both aliases share that instance's memory budget. This check passing tells
+# you nothing about heavy-cache isolation, by the check's own admission. See
+# the ruling in nautobot/config/nautobot_config.py. If a warning is ever
 # deliberately accepted, add it to ACCEPTED_WARNINGS with the ruling that
 # accepted it — so an undeclared warning fifteen still fails loudly.
 ACCEPTED_WARNINGS=""   # none accepted; clean is the baseline

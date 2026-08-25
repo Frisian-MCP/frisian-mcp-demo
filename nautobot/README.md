@@ -486,6 +486,12 @@ worse than a build error.
 docker compose restart   # restart in place — the estate is RESTORED
 docker compose down      # stop and remove the containers
 docker compose down -v   # stop and discard local state as well
+
+# Upgrading from a demo published before 2026-08-25: add --remove-orphans
+# once. That build ran a second `redis-heavy` container, and `down` only
+# removes services the CURRENT compose file defines — so without this the
+# old container keeps running, healthy and unreferenced.
+docker compose down -v --remove-orphans
 ```
 
 All three return the estate to its baked state on the next start; the database
