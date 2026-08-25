@@ -30,6 +30,16 @@ x-app: &app
   volumes:
     # THE DEMO. Nautobot ships a settings file; this one replaces it.
     - ./config/nautobot_config.py:/opt/nautobot/nautobot_config.py:ro
+    # Served at /static/getting-started.html — credentials, tiers and what each
+    # identity can actually do. No web server and no container: it is an extra
+    # STATICFILES_DIRS entry, and `collectstatic` copies it in at boot.
+    #
+    # Mounted at its OWN path, NOT into /opt/nautobot/static. Bind-mounting a
+    # file into the collectstatic TARGET makes that directory unwritable for
+    # the runtime user, and the boot then dies with a PermissionError creating
+    # /opt/nautobot/static/monaco-editor-* — a failure that names a vendored
+    # editor and says nothing about the page you added.
+    - ./web:/opt/demo-static:ro
     - media_root:/opt/nautobot/media
     - demo_state:/opt/nautobot/demo-state
 

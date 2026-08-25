@@ -1,0 +1,147 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>frisian-mcp demo — getting started</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg:#f7f7f8; --panel:#fff; --ink:#16181d; --muted:#5c6270; --line:#e2e4e9;
+    --accent:#1f6feb; --warn-bg:#fff6e5; --warn-line:#e0a800; --code:#f1f2f4;
+    --ok:#1a7f37; --no:#b62324;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#16181d; --panel:#1d2027; --ink:#e6e8ec; --muted:#9aa1ae; --line:#2c3038;
+      --accent:#589bff; --warn-bg:#2b2417; --warn-line:#a07b16; --code:#24272f;
+      --ok:#4ac26b; --no:#f85149;
+    }
+  }
+  * { box-sizing:border-box }
+  body { margin:0; padding:2.5rem 1.25rem 5rem; background:var(--bg); color:var(--ink);
+         font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif }
+  main { max-width:60rem; margin:0 auto }
+  h1 { font-size:1.9rem; margin:0 0 .25rem; letter-spacing:-.02em }
+  .sub { color:var(--muted); margin:0 0 2rem }
+  h2 { font-size:1.15rem; margin:2.5rem 0 .75rem; padding-bottom:.4rem; border-bottom:1px solid var(--line) }
+  code, kbd { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.87em;
+              background:var(--code); padding:.15em .4em; border-radius:4px }
+  pre { background:var(--code); padding:.9rem 1rem; border-radius:8px; overflow-x:auto; margin:.5rem 0 }
+  pre code { background:none; padding:0 }
+  table { border-collapse:collapse; width:100%; margin:.5rem 0; display:block; overflow-x:auto }
+  th,td { text-align:left; padding:.55rem .7rem; border-bottom:1px solid var(--line); vertical-align:top }
+  th { font-size:.78rem; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); font-weight:600 }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:1.1rem 1.3rem; margin:1rem 0 }
+  .note { background:var(--warn-bg); border-left:3px solid var(--warn-line) }
+  .yes { color:var(--ok); font-weight:600 } .no { color:var(--no); font-weight:600 }
+  a { color:var(--accent) }
+  .cred { font-size:1.05rem }
+  .cred b { font-family:ui-monospace,monospace }
+  footer { margin-top:3.5rem; padding-top:1rem; border-top:1px solid var(--line); color:var(--muted); font-size:.87rem }
+</style>
+<main>
+
+<h1>frisian-mcp demo</h1>
+<p class="sub">Stock Nautobot, with one settings file swapped in. Everything below is what that file configures.</p>
+
+<div class="card note">
+  <strong>Every credential on this page is published on purpose.</strong>
+  They are fixed constants, identical in every build, and they are not secrets — the demo's
+  safety property is that it binds to <code>127.0.0.1</code>, not that anything here is hidden.
+  Do not reuse any of them anywhere, and do not bind this stack to <code>0.0.0.0</code>.
+</div>
+
+<h2>Log in</h2>
+<p class="cred">
+  Web UI at <a href="/">http://127.0.0.1:8080</a> — password <b>frisian-demo-public-password</b>
+  for all three accounts.
+</p>
+<p>If your browser autofills a saved Nautobot password, the login will fail and the field is
+blanked so you cannot see what was sent. Paste the password, or use a private window.</p>
+
+<h2>The three identities</h2>
+<p>Three identities, three doors, three tier ceilings. The door and the account's own
+permissions are <em>independent</em> controls — which is the thing this demo exists to show.</p>
+
+<table>
+  <tr><th>account</th><th>MCP door</th><th>tier ceiling</th><th>Django permissions</th></tr>
+  <tr>
+    <td><code>demo-readonly</code></td><td><code>/mcp/read-only</code></td><td><code>read</code></td>
+    <td><code>view</code> on the scoped estate</td>
+  </tr>
+  <tr>
+    <td><code>demo-netops</code></td><td><code>/mcp/read-write</code></td><td><code>read_write</code></td>
+    <td><code>view</code> on all scoped apps; <strong>write on <code>dcim</code> and <code>ipam</code> only</strong></td>
+  </tr>
+  <tr>
+    <td><code>demo-admin</code></td><td><code>/mcp/admin</code></td><td><code>admin</code></td>
+    <td>superuser — bypasses per-object permissions entirely</td>
+  </tr>
+</table>
+
+<h2>MCP tokens</h2>
+<pre><code>demo-readonly   Bearer frisian-demo-readonly-token-public-do-not-reuse
+demo-netops     Bearer frisian-demo-netops-token-public-do-not-reuse
+demo-admin      Bearer frisian-demo-admin-token-public-do-not-reuse</code></pre>
+<p>Each token is only accepted at its own door. A door is a mount point, not a filter on the
+token — presenting the read-only token at <code>/mcp/admin</code> is refused, and
+<code>/mcp/</code> itself is <code>404</code>, so the doors never collapse onto a default mount.</p>
+
+<h2>What each account can actually do</h2>
+<table>
+  <tr><th></th><th>read the estate</th><th>write dcim / ipam</th><th>write dns, circuits, bgp…</th><th>users, vpn, secrets</th></tr>
+  <tr><td><code>demo-readonly</code></td><td class="yes">yes</td><td class="no">no</td><td class="no">no</td><td class="no">no</td></tr>
+  <tr><td><code>demo-netops</code></td><td class="yes">yes</td><td class="yes">yes</td><td class="no">refused</td><td class="no">no</td></tr>
+  <tr><td><code>demo-admin</code></td><td class="yes">yes</td><td class="yes">yes</td><td class="yes">yes</td><td class="yes">yes</td></tr>
+</table>
+
+<div class="card">
+  <p style="margin-top:0"><strong><code>demo-netops</code> is the interesting one.</strong>
+  Its door permits the write tier across all twelve scoped resource groups. Its own Django
+  permissions permit writes to two of them.</p>
+  <p style="margin-bottom:0">So it is <em>refused</em> a write its door plainly allows — and that refusal is the feature.
+  If both controls were set to the same thing, you could not tell which one was doing the work.</p>
+</div>
+
+<h2>Two things worth trying first</h2>
+
+<p><strong>1. Do not compare <code>tools/list</code> lengths on the scoped doors.</strong>
+It is the intuitive move and it proves nothing — both return 12 tools with identical names.
+Two filters run in series: the route's allow-list fixes the candidate set, then
+permission-aware discovery filters within it. On the scoped doors the first filter has already
+removed almost everything the two identities differ on.</p>
+
+<p>The same door, asked by <code>demo-admin</code>, returns <strong>13</strong>:</p>
+<pre><code>/mcp/read-only   demo-readonly   12
+/mcp/read-write  demo-netops     12
+/mcp/read-only   demo-admin      13    &lt;- load_balancers</code></pre>
+<p><code>load_balancers</code> is on that door's allow-list, so it is mounted for everyone —
+<em>hidden</em> from identities that cannot use it, not absent. Invoking it proves the
+difference, because a refusal is not the same answer as a missing route:</p>
+<pre><code>demo-readonly   403  "You do not have permission to use 'loadbalancerpool'/'list'"
+demo-admin      200</code></pre>
+
+<p><strong>2. Ask a dispatcher what it will let you do.</strong> Send
+<code>action: "help"</code> to <code>dcim</code> and then to <code>dns</code> as
+<code>demo-netops</code>. Same door, same token, two different answers — that is where the
+per-identity difference shows plainly.</p>
+
+<h2>Endpoints</h2>
+<table>
+  <tr><th>what</th><th>where</th></tr>
+  <tr><td>Web UI</td><td><code>http://127.0.0.1:8080/</code></td></tr>
+  <tr><td>MCP, read tier</td><td><code>http://127.0.0.1:8080/mcp/read-only</code></td></tr>
+  <tr><td>MCP, read-write tier</td><td><code>http://127.0.0.1:8080/mcp/read-write</code></td></tr>
+  <tr><td>MCP, admin tier</td><td><code>http://127.0.0.1:8080/mcp/admin</code></td></tr>
+  <tr><td>REST API</td><td><code>http://127.0.0.1:8080/api/</code></td></tr>
+</table>
+
+<h2>Resetting</h2>
+<p>The database runs on a <code>tmpfs</code>, so the estate is restored on <strong>every</strong>
+start — including <code>docker compose restart</code>. Break anything you like; a restart puts
+it back, and getting back to a known-good demo never takes more than that.</p>
+
+<footer>
+  The settings file driving all of this is <code>nautobot/config/nautobot_config.py</code> in the
+  repository, mounted over Nautobot's own. Read it, change it, <code>docker compose restart</code>.
+</footer>
+
+</main>
