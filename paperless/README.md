@@ -73,6 +73,70 @@ BASE_URL="http://127.0.0.1:8081" \
 
 Five tools come back. The walkthrough below is what makes that interesting.
 
+## What the first boot looks like, and why it looks like a build
+
+It does not build anything. `docker-compose.yml` has no `build:` key at all —
+building requires the explicit `-f docker-compose.build.yml` chain further
+down. But two things about the startup output reliably read as a local build
+the first time you see them, so they are worth naming.
+
+### 1. A wall of `mkdir` and `changed ownership`
+
+```text
+mkdir: created directory '/usr/src/paperless/media/documents/originals'
+changed ownership of '/usr/src/paperless/data' from root:root to paperless:paperless
+changed ownership of '/usr/src/paperless/media' from root:root to paperless:paperless
+```
+
+That is the estate being restored, and it happens on **every** start rather
+than only the first.
+
+Paperless's image uses s6-overlay, which narrates each init step, and this host
+mounts all four Paperless data directories as RAM disks. So those directories
+genuinely are absent at every boot and genuinely do get recreated and chowned —
+`init-folders` is doing real work, not replaying a cached image layer. The same
+mechanism is what makes `docker compose restart` hand you a clean archive in
+about twenty seconds, so the noise is the feature's receipt.
+
+It is louder than the Nautobot host for that reason: there, only the database
+is a RAM disk.
+
+### 2. No `Pulling from ghcr.io` lines
+
+Compose's default `pull_policy` is `missing` — it contacts the registry only
+when the tag is not already in your local image store. On an empty cache you
+get what you would expect:
+
+```text
+Image ghcr.io/frisian-mcp/demo-paperless-db:v0.1.0-pre  Pulling
+Image ghcr.io/frisian-mcp/demo-paperless:v0.1.0-pre     Pulling
+...
+Image ghcr.io/frisian-mcp/demo-paperless:v0.1.0-pre     Pulled
+```
+
+Measured cold, with both images removed first: **28 seconds** from
+`docker compose up` to a healthy stack, pull included.
+
+**If you see no pull lines, the tag was already in your store.** The case that
+surprises people: on Docker Desktop with the **containerd image store**
+enabled, `docker buildx build --push` writes the image into the local store as
+well as the registry. So whoever ran `publish.sh --push` on a machine has the
+images cached there as a side effect and will never see a pull on that machine
+again. On the classic image store `--push` leaves nothing behind and the pull
+happens normally — which is why two people can run the same command and see
+different output.
+
+To settle it either way, ask the image where it came from:
+
+```bash
+docker image inspect ghcr.io/frisian-mcp/demo-paperless:v0.1.0-pre \
+  --format '{{.RepoDigests}}'
+```
+
+A digest means it came from the registry. An image Docker built locally has an
+**empty** `RepoDigests` list, always — so this is a definitive answer rather
+than an inference from the log output.
+
 ## Every start is a fresh archive
 
 Both halves of the demo archive are restored **every time the stack starts** —
