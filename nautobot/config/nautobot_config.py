@@ -618,11 +618,25 @@ FRISIAN_MCP_BULK_CREATE_RESOURCES = "*"
 # ---------------------------------------------------------------------------
 # Dispatcher groups — Nautobot 3.x core plus the four plugin surfaces.
 #
-# Carried across verbatim from the upstream deployment's config, where they
-# were verified against the live registered resources. Basenames follow DRF
-# convention: Model._meta.object_name.lower(). A group whose basenames match no
-# registered resource produces a startup WARNING and is skipped, so listing a
-# surface that is not installed costs nothing.
+# Basenames follow DRF convention: Model._meta.object_name.lower().
+#
+# ⚠️ THIS LIST IS AN ALLOW-LIST, AND THE PACKAGE DOES NOT WARN ABOUT WHAT IT
+# OMITS. The asymmetry is the trap:
+#
+#   listed but NOT registered   -> startup WARNING, group entry skipped. Safe.
+#   registered but NOT listed   -> published as ~10 FLAT tools. SILENT.
+#
+# So a Nautobot upgrade that adds a model silently adds a pile of ungrouped
+# tools, and `nautobot-server check` still reports "no issues". Measured on
+# 3.2.3: cabletype, cabletocabletermination (dcim/0086, dcim/0088) and
+# ipaddressrange (ipam/0057) were absent from this list and appeared as 30 flat
+# tools on the ops door — against 17 dispatchers, on the one door that shows
+# the full surface, undercutting exactly the "N endpoints collapse into 17
+# tools" point the demo exists to make. They are folded in below.
+#
+# WHEN YOU BUMP NAUTOBOT, RE-DERIVE THIS LIST. Compare the ops door's
+# tools/list against the dispatchers: anything flat is a resource no group
+# claims.
 # ---------------------------------------------------------------------------
 FRISIAN_MCP_DISPATCH_GROUPS = {
     "dcim": [
@@ -631,7 +645,8 @@ FRISIAN_MCP_DISPATCH_GROUPS = {
         "interface", "interfacetemplate",
         "interfaceredundancygroup", "interfaceredundancygroupassociation",
         "interfacevdcassignment",
-        "cable", "location", "locationtype",
+        "cable", "cabletype", "cabletocabletermination",
+        "location", "locationtype",
         "manufacturer", "devicetype", "devicefamily", "deviceredundancygroup",
         "devicebay", "devicebaytemplate",
         "devicetypetosoftwareimagefile", "deviceclusterassignment",
@@ -660,7 +675,7 @@ FRISIAN_MCP_DISPATCH_GROUPS = {
         "interfaceconnections", "powerconnections",
     ],
     "ipam": [
-        "ipaddress", "ipaddresstointerface",
+        "ipaddress", "ipaddressrange", "ipaddresstointerface",
         "prefix", "prefixlocationassignment",
         "vlan", "vlangroup", "vlanlocationassignment",
         "vrf", "vrfdeviceassignment", "vrfprefixassignment",
