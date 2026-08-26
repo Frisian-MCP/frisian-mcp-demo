@@ -516,8 +516,24 @@ FRISIAN_MCP_HMAC_KEY = os.getenv(
 # Public origin as the client reaches it. The demo is loopback-bound by
 # default; override when fronting it with anything else, or OAuth redirects
 # will point somewhere the browser cannot follow.
+#
+# ⚠️ `127.0.0.1`, NOT `localhost`, AND THE TWO ARE NOT INTERCHANGEABLE HERE.
+#
+# This value is echoed verbatim as `resource` in the protected-resource
+# metadata a 401 points at. RFC 9728 has the client check that `resource`
+# matches the URL it actually connected to, and it is a STRING comparison —
+# `http://localhost:8080/mcp/ops` does not match a connection to
+# `http://127.0.0.1:8080/mcp/ops`, however identical the two hosts are.
+#
+# Everything else in this demo says 127.0.0.1: the compose bind, all three
+# shipped client configs, and the docs. This said `localhost`, so a strict
+# OAuth client was refused by its own origin check — and the failure reads as
+# a broken server rather than a mismatched string.
+#
+# Browsers tolerate either, so the consent screen is unaffected. The MCP
+# client is the one doing the comparison, so the connection URL wins.
 FRISIAN_MCP_OAUTH_ISSUER = os.getenv(
-    "FRISIAN_MCP_OAUTH_ISSUER", "http://localhost:8080"
+    "FRISIAN_MCP_OAUTH_ISSUER", "http://127.0.0.1:8080"
 )
 
 # Zero, not two. The upstream deployment sat behind an ALB plus an nginx
