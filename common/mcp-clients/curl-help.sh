@@ -22,9 +22,15 @@ if [ -z "${TOKEN:-}" ]; then
 fi
 
 if [ -z "$GROUP" ]; then
-  echo "Usage: TOKEN=<token> [ROUTE=mcp/read-only] $0 <group>" >&2
-  echo "Groups: dcim ipam circuits tenancy virtualization wireless cloud" >&2
-  echo "        golden_config dns bgp ssot extras" >&2
+  echo "Usage: TOKEN=<token> [BASE_URL=...] [ROUTE=mcp/read-only] $0 <group>" >&2
+  echo >&2
+  echo "Nautobot  (BASE_URL=http://127.0.0.1:8080, the default):" >&2
+  echo "  dcim ipam circuits tenancy virtualization wireless cloud" >&2
+  echo "  golden_config dns bgp ssot extras" >&2
+  echo >&2
+  echo "Paperless (BASE_URL=http://127.0.0.1:8081):" >&2
+  echo "  documents classification mail workflow monitoring" >&2
+  echo "  sharing system            (admin door only)" >&2
   exit 2
 fi
 

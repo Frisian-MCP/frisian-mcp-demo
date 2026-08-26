@@ -1,0 +1,48 @@
+# Local-build override for the Paperless-ngx demo host.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
+#
+# The default path (`docker compose up`, no flags) pulls prebuilt images from
+# GHCR. This file is the escape hatch for building both images yourself —
+# reviewing the Dockerfiles, testing a config change, or working offline.
+#
+# It overrides ONLY the build inputs. Ports, volumes, healthchecks, environment
+# and the dependency graph all still come from docker-compose.yml.
+#
+# The `image:` keys are restated so a local build tags the same names the
+# default path expects, keeping the lockstep pin intact: a local build replaces
+# BOTH images at the same DEMO_TAG, never one of the two.
+#
+# NOTE: both images need artifacts that are NOT committed to this repo —
+# db/demo.sql.gz for the database, estate/media.tar.gz for the application.
+# `./seed/seed.sh` produces both. The db build fails loudly without its half;
+# the app build succeeds without its half and says so at every start.
+
+services:
+
+  paperless:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Build args must be declared here or they never reach the Dockerfile:
+      # compose does NOT forward the environment into a build. Without this the
+      # documented escape hatch fails the one-lane guard no matter what the
+      # user exports.
+      #
+      # All default EMPTY so the guard keeps failing closed — compose must not
+      # be the thing that silently picks a lane.
+      args:
+        FRISIAN_MCP_SPEC: "${FRISIAN_MCP_SPEC:-}"
+        FRISIAN_MCP_LOCAL_WHEEL: "${FRISIAN_MCP_LOCAL_WHEEL:-}"
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-}"
+        PIP_EXTRA_INDEX_URL: "${PIP_EXTRA_INDEX_URL:-}"
+        DEMO_TAG: "${DEMO_TAG:-v0.1.0}"
+    image: "ghcr.io/frisian-mcp/demo-paperless:${DEMO_TAG:-v0.1.0}"
+
+  db:
+    build:
+      context: .
+      dockerfile: db/Dockerfile
+      args:
+        DEMO_TAG: "${DEMO_TAG:-v0.1.0}"
+    image: "ghcr.io/frisian-mcp/demo-paperless-db:${DEMO_TAG:-v0.1.0}"

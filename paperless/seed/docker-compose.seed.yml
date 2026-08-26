@@ -1,0 +1,39 @@
+# Seed-stack override. Used ONLY by seed/seed.sh.
+#
+#   docker compose -f docker-compose.yml -f seed/docker-compose.seed.yml ...
+#
+# Always invoked from the HOST directory (paperless/), so relative paths here
+# resolve against paperless/ — the project directory is the first compose
+# file's directory, not this file's.
+#
+# Two differences from the demo stack, and no more. Everything else — ports,
+# environment, healthchecks, the tmpfs mounts, the dependency graph — is
+# inherited, because a seed run against a stack that differs from the shipped
+# one produces an estate that was never tested in the shipped one.
+#
+#   1. the application image is built from this tree rather than pulled
+#   2. the database is a PLAIN postgres, with no baked dump
+#
+# Point 2 is the whole reason this file exists. The demo db image restores a
+# dump that does not exist yet; this run is what creates it.
+
+services:
+
+  paperless:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        FRISIAN_MCP_SPEC: "${FRISIAN_MCP_SPEC:-}"
+        FRISIAN_MCP_LOCAL_WHEEL: "${FRISIAN_MCP_LOCAL_WHEEL:-}"
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-}"
+        PIP_EXTRA_INDEX_URL: "${PIP_EXTRA_INDEX_URL:-}"
+        DEMO_TAG: "seed"
+    image: "frisian-mcp-demo/paperless-seed:local"
+    volumes:
+      # The generated corpus and its manifest. Read-only: this run consumes
+      # from a COPY of it, so a bug in the pipeline cannot eat the source.
+      - ./seed/out:/usr/src/paperless/demo-seed:ro
+
+  db:
+    image: "docker.io/library/postgres:17"

@@ -218,6 +218,57 @@ restart**, and `PGDATA` lives in RAM (the size is a cap, not a reservation).
 For a demo whose estate is the product and where nobody's local poking is
 precious, that is the right trade.
 
+### If the estate includes FILES, the application image carries them
+
+Some hosts' estates are not just database rows. A document archive, an image
+library, an attachment store — the database references files that have to exist
+on disk, and a dump restored next to an empty media directory gives you an
+instance where every listing works and every download 404s.
+
+Those files ride in the **application** image, not the database image, and not
+a third one:
+
+| image | carries |
+|---|---|
+| `demo-<host>-db` | the SQL |
+| `demo-<host>` | the files the SQL points at |
+
+The consequences are worth stating, because they are what someone
+"simplifying" this will not have thought about:
+
+- **It is a second, independent reason the lockstep tag matters.** Two images
+  from different builds no longer merely risk a migration error; they
+  guarantee dangling file references.
+- **The files must be restored on every start, like the database.** Bake them
+  as an archive at a fixed path in the image and unpack them into the media
+  directory from the application's own init hook. The media directory is a
+  tmpfs for exactly the same reason `PGDATA` is — and, for exactly the same
+  reason, leaving it undeclared is not enough when the upstream image declares
+  `VOLUME` on it.
+- **The artifact is not committed.** It is a build input like the dump, and
+  usually a much larger binary one. Ship a `.gitkeep` so the `COPY` works on a
+  clean clone, and make the restore hook say loudly at boot when the archive is
+  absent — "the demo has no documents in it" otherwise reads as a bug in the
+  seed, in the database image, or in frisian-mcp.
+
+`paperless/` is the worked example.
+
+### Where the golden artifact comes from is a per-host decision
+
+`nautobot/` fetches an already-credential-reset dump produced OUTSIDE this
+repository, and its workflow is bake-only. That is a security property, not a
+convention: this repository is public, Actions artifacts in public repositories
+are publicly downloadable, and that estate descends from a live,
+internet-facing instance.
+
+`paperless/` seeds in the workflow, from generators committed here, because its
+estate is generated from fiction and has no inherited credential to reset.
+
+**Do not align the two.** Each choice follows from where that estate came from.
+A host whose estate has any real ancestry seeds outside this repo; a host whose
+estate is synthetic may seed in it, and gets a property the other cannot have —
+the whole demo is reproducible from a clone.
+
 ### The database role is asserted, not assumed
 
 The dump assigns ownership to a specific role, and the entrypoint restores with
