@@ -205,7 +205,18 @@ FRISIAN_MCP_DISPATCH_GROUPS = {
     # Automation.
     "workflow": ["workflow", "workflowtrigger", "workflowaction"],
     # Public, unauthenticated share URLs.
-    "sharing": ["sharelink", "sharelinkbundle"],
+    #
+    # `sharelinkbundle` was listed here and is REMOVED: it does not exist in
+    # Paperless 2.20.15, which is the version this image pins.
+    #
+    # A group naming an absent resource is not fatal — help resolves it away —
+    # but it is not free either. The dispatcher's own description line counts
+    # DECLARED resources while help counts RESOLVED ones, so the group
+    # advertised "4 tools across 2 resources" to every caller while offering
+    # one. Listing only what this version actually has is the honest fix; do
+    # not re-add a resource speculatively because a newer Paperless might grow
+    # it.
+    "sharing": ["sharelink"],
     # Accounts and instance configuration. NOT on the scoped doors — see the
     # route model below.
     "system": ["users", "groups", "applicationconfiguration"],
