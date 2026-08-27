@@ -6,6 +6,29 @@ host; `nautobot` is the worked example.
 **Nobody but Jeremy pushes or publishes.** Agents prepare the workflow and this
 runbook and hand off the trigger.
 
+### Reading this for the `paperless` host
+
+Everything applies unchanged: same lockstep-pair rule, same gates, same
+verification, same `publish.sh` shape and the same one-line
+`FRISIAN_MCP_SOURCE` switch. Substitute `paperless/` for `nautobot/` and
+`demo-paperless` / `demo-paperless-db` for the image names.
+
+Two host differences to know before you run anything:
+
+1. **The estate artifact is produced IN the repository**, by
+   `paperless/seed/seed.sh`, and its workflow has a `seed` job where
+   `build-nautobot.yml` has an `artifact` job. There is no `GOLDEN_SQL_URL`
+   variable to configure. That is not a shortcut — the Paperless archive is
+   generated from fiction and has no inherited credentials to reset, so it is
+   safe by construction rather than safe by scrubbing. See
+   `common/docs/HOST-CONTRACT.md`.
+2. **The estate has TWO artifacts, not one**: `paperless/db/demo.sql.gz` and
+   `paperless/estate/media.tar.gz`. The db image carries the SQL; the
+   application image carries the document files that SQL points at. So the
+   lockstep-pair rule below binds twice as hard here — a split pair does not
+   merely risk a migration error, it guarantees an archive where every listing
+   works and every download 404s. `publish.sh` refuses to build without both.
+
 ---
 
 ## The correctness property

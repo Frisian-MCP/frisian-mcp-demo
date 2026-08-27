@@ -32,3 +32,14 @@ Thumbs.db
 
 # Local rehearsal wheels are a build input, never a repo artifact.
 nautobot/wheels/*.whl
+paperless/wheels/*.whl
+
+# The Paperless demo estate has TWO halves. `**/demo.sql.gz` above covers the
+# database; this covers the media tree the database points at. Both are build
+# artifacts produced by paperless/seed/seed.sh, and the media tarball is a
+# multi-megabyte binary that has no business in git.
+**/media.tar.gz
+
+# The generated document corpus. Reproducible from paperless/seed/corpus.py,
+# so committing it would add binary churn for no gain.
+paperless/seed/out/
