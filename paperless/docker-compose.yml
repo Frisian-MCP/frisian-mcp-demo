@@ -1,0 +1,182 @@
+---
+# frisian-mcp demo — Paperless-ngx
+#
+# Upstream Paperless-ngx's own compose shape — one application container, one
+# redis, one db — with exactly two differences:
+#
+#   1. the images carry frisian-mcp and the pre-built demo estate
+#   2. config/paperless_frisian_mcp.py is loaded as DJANGO_SETTINGS_MODULE
+#
+# Point 2 is the demo. The file is in the clone: read it, change it,
+# `docker compose restart`, and watch the routes and scopes change.
+#
+#   docker compose up          pull and run
+#   docker compose restart     re-read the config, reset the estate
+#
+# THERE IS NO `env_file:` HERE, DELIBERATELY.
+#
+# Every value is declared inline with a ${VAR:-default}. Compose still reads
+# the committed .env for interpolation, so .env overrides everything — but the
+# stack also boots correctly WITHOUT .env. Two independent layers; neither
+# alone is sufficient, and `env_file:` is mandatory-if-declared, so a missing
+# file would abort the whole stack before anything started.
+
+name: frisian-mcp-demo-paperless
+
+services:
+
+  paperless:
+    image: "ghcr.io/frisian-mcp/demo-paperless:${DEMO_TAG:-v0.1.0}"
+    restart: unless-stopped
+    ports:
+      # Loopback by default. 0.0.0.0 publishes a stack whose credentials are
+      # printed in the README.
+      #
+      # 8081 rather than 8080: the Nautobot host owns 8080, and the two demos
+      # are meant to be runnable side by side.
+      - "${DEMO_BIND_HOST:-127.0.0.1}:${DEMO_HTTP_PORT:-8081}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # ─── THE DEMO ─────────────────────────────────────────────────────────
+      # Paperless's manage.py, asgi.py and celery.py all use
+      # os.environ.setdefault, so this wins over their own paperless.settings
+      # for every process: webserver, consumer, worker and scheduler alike.
+      DJANGO_SETTINGS_MODULE: "paperless_frisian_mcp"
+      # The settings module sits beside Paperless's own package. Services are
+      # started with that as their working directory, but PYTHONPATH is stated
+      # rather than relied upon — a settings module Django cannot import takes
+      # the container down with an error that names the module, not the path.
+      PYTHONPATH: "/usr/src/paperless/src"
+
+      # ─── frisian-mcp ──────────────────────────────────────────────────────
+      # Changing this breaks every token baked into the demo database.
+      FRISIAN_MCP_HMAC_KEY: "${FRISIAN_MCP_HMAC_KEY:-frisian-mcp-demo-public-hmac-key-do-not-reuse}"
+      # Must be the origin a client actually connects to — it is echoed
+      # verbatim as `resource` in the RFC 9728 metadata and compared as a
+      # string. See the note in config/paperless_frisian_mcp.py.
+      FRISIAN_MCP_OAUTH_ISSUER: "http://${DEMO_BIND_HOST:-127.0.0.1}:${DEMO_HTTP_PORT:-8081}"
+      # Heavy-response continuation cache, on its own logical DB of the one
+      # Redis. Paperless uses db 0 for the broker, channels and its default
+      # cache, so 2 is free. It needs to be separate from the default cache:
+      # continuation tokens live there, and an eviction storm on the default
+      # cache would otherwise invalidate them.
+      FRISIAN_MCP_HEAVY_CACHE_URL: "redis://redis:6379/2"
+
+      # ─── Paperless ────────────────────────────────────────────────────────
+      PAPERLESS_REDIS: "redis://redis:6379"
+      PAPERLESS_DBENGINE: "postgresql"
+      PAPERLESS_DBHOST: "db"
+      PAPERLESS_DBPORT: "5432"
+      PAPERLESS_DBNAME: "${POSTGRES_DB:-paperless}"
+      PAPERLESS_DBUSER: "${POSTGRES_USER:-paperless}"
+      PAPERLESS_DBPASS: "${POSTGRES_PASSWORD:-paperless}"
+
+      PAPERLESS_URL: "http://${DEMO_BIND_HOST:-127.0.0.1}:${DEMO_HTTP_PORT:-8081}"
+      # A second gate behind the loopback bind. Reaching the demo under any
+      # other hostname fails at the Django layer even if DEMO_BIND_HOST is
+      # widened. Both have to be changed deliberately; neither changes by
+      # accident.
+      PAPERLESS_ALLOWED_HOSTS: "${PAPERLESS_ALLOWED_HOSTS:-localhost,127.0.0.1,[::1]}"
+      PAPERLESS_TIME_ZONE: "${PAPERLESS_TIME_ZONE:-UTC}"
+      PAPERLESS_OCR_LANGUAGE: "eng"
+      # The demo corpus is born-digital PDFs with a real text layer, so there
+      # is nothing to OCR. `skip` means "leave a page alone if it already has
+      # text", which keeps the seed — and any document a user adds — from
+      # burning minutes of CPU recovering text that is already there.
+      #
+      # NOT `skip_text`. That is an ocrmypdf flag, not one of Paperless's
+      # values, and Paperless rejects it in a Django system check at BOOT: the
+      # container dies during init with `OCR output mode "skip_text" is not
+      # valid` before any service starts. Measured, not guessed.
+      PAPERLESS_OCR_MODE: "skip"
+      # PAPERLESS_SECRET_KEY is intentionally absent — generated per deployment
+      # on first boot and persisted to the demo_state volume. Publishing one
+      # would publish a session-forgery key for every copy of this demo.
+      #
+      # PAPERLESS_ADMIN_USER is intentionally absent too. The superuser is
+      # demo-admin, and it arrives in the baked database. Setting this would
+      # create a SECOND superuser on every boot, with a password nobody
+      # documented.
+    volumes:
+      # THE DEMO. The image bakes a copy; this mount makes the copy in your
+      # clone the one that is actually loaded.
+      - ./config/paperless_frisian_mcp.py:/usr/src/paperless/src/paperless_frisian_mcp.py:ro
+      # Per-deployment SECRET_KEY. The only thing here that should survive a
+      # restart, and the only named volume this host declares.
+      - demo_state:/usr/src/paperless/demo-state
+    tmpfs:
+      # EVERY paperless data directory is a RAM disk, and each one is a control
+      # rather than an optimisation.
+      #
+      # The upstream image declares VOLUME on all four of these, so leaving
+      # them undeclared here does NOT give you a fresh directory — Docker
+      # creates an ANONYMOUS volume and Compose preserves it across container
+      # recreation, including an `up` onto a changed image. Measured on the
+      # Nautobot host, same harness both ways: with an anonymous volume the
+      # restore is skipped on `restart` and on upgrade; with a tmpfs it runs
+      # every time.
+      #
+      # media   restored from the baked tarball on every start, by
+      #         /custom-cont-init.d/10-restore-demo-estate.sh
+      # data    search index + logs; the index is rebuilt from the database on
+      #         every start by the image's own init-search-index step
+      # consume watched folder — starts empty, as a demo should
+      # export  scratch space for the export command
+      - /usr/src/paperless/media:size=1g
+      - /usr/src/paperless/data:size=512m
+      - /usr/src/paperless/consume:size=256m
+      - /usr/src/paperless/export:size=256m
+    healthcheck:
+      # The upstream image's own healthcheck, restated because `tmpfs` and
+      # `depends_on` in this file are only as good as the signal they wait on.
+      test: ["CMD", "curl", "-fs", "-S", "--max-time", "5", "http://localhost:8000"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 120s
+
+  redis:
+    image: "docker.io/library/redis:8-alpine"
+    restart: unless-stopped
+    # No persistence. Everything in here is a broker queue or a cache, both of
+    # which are rebuilt from the database on start — and an appendonly file
+    # would be one more piece of state surviving a restart that the rest of
+    # this stack is carefully arranged not to have.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  db:
+    image: "ghcr.io/frisian-mcp/demo-paperless-db:${DEMO_TAG:-v0.1.0}"
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-paperless}"
+      POSTGRES_USER: "${POSTGRES_USER:-paperless}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-paperless}"
+    # PGDATA is a tmpfs, and that is what makes the demo reproducible: the
+    # estate is restored on EVERY start, including `docker compose restart`.
+    #
+    # Do not replace this with a volume, and do not remove it because "no
+    # volume is declared anyway". The postgres image declares VOLUME in its own
+    # Dockerfile, so Docker creates an ANONYMOUS one — which Compose then
+    # preserves across recreation, including an `up` onto a changed image.
+    # Measured: that path skips initdb and comes up green against a stale
+    # database, and the application then MIGRATES it in place, unprompted.
+    tmpfs:
+      - /var/lib/postgresql/data:size=1g
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 120s
+
+volumes:
+  demo_state:

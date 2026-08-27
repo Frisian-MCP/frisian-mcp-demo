@@ -3,7 +3,7 @@
 Clone-and-run demos of [frisian-mcp](https://github.com/Frisian-MCP/frisian-mcp)
 against real host applications. Each demo ships a pre-built estate and
 pre-provisioned agent identities, so you can reach a real tool call in about a
-minute. Nautobot is the first host.
+minute. Nautobot was the first host; Paperless-ngx is the second.
 
 ## Safety: localhost demo only
 
@@ -95,9 +95,15 @@ host README.
 
 ## Demo hosts
 
-| Host | Path | Status |
-|---|---|---|
-| Nautobot | [`nautobot/`](nautobot/) | First demo host |
+| Host | Path | Port | The estate |
+|---|---|---|---|
+| Nautobot | [`nautobot/`](nautobot/) | 8080 | a network: sites, devices, interfaces, circuits, addressing |
+| Paperless-ngx | [`paperless/`](paperless/) | 8081 | a document archive: invoices, statements, contracts, reports |
+
+Different ports, so both can run at once — which is the point of having two.
+The mechanism is identical and the domain is not, so watching the same route
+model carve a document archive and a network estate is what separates "this
+works for network data" from "this works".
 
 Each host directory is self-contained, and the entry path is always the same:
 
@@ -106,11 +112,21 @@ cd <host>
 docker compose up
 ```
 
-Start with [`nautobot/README.md`](nautobot/README.md) — it carries the
-quickstart, the identity roster, the first-boot expectations, and the full
-walkthrough. See
+Start with the host README —
+[`nautobot/README.md`](nautobot/README.md) or
+[`paperless/README.md`](paperless/README.md) — each carries the quickstart, the
+identity roster, the first-boot expectations, and the full walkthrough. See
 [`common/docs/HOST-CONTRACT.md`](common/docs/HOST-CONTRACT.md) for what any
 host directory must provide.
+
+### The identities are not interchangeable between hosts
+
+The `read` and `admin` tokens are deliberately the same strings on both hosts,
+because an identity that means the same thing on both surfaces should not need
+a different line in a client config. The scoped writer in the middle is
+host-specific by nature — `demo-netops` on Nautobot, `demo-editor` on
+Paperless — because what a narrow write grant should cover depends entirely on
+what the estate is.
 
 ## Images
 
@@ -120,12 +136,20 @@ pre-seeded database — pinned to one tag:
 ```text
 ghcr.io/frisian-mcp/demo-nautobot:v0.1.0
 ghcr.io/frisian-mcp/demo-nautobot-db:v0.1.0
+
+ghcr.io/frisian-mcp/demo-paperless:v0.1.0
+ghcr.io/frisian-mcp/demo-paperless-db:v0.1.0
 ```
 
-**There is no `latest` tag**, and the pair must not be split. The database
+**There is no `latest` tag**, and a pair must not be split. The database
 carries identities whose tokens are verified by a key the application image
 holds, so mismatched tags fail in ways that look like broken authentication.
 The tag is set once per host, in that host's committed `.env`.
+
+On the Paperless host there is a second reason: its estate is split across the
+two images. The database image carries the SQL and the application image
+carries the document files that SQL points at, so a split pair gives you an
+archive where every listing works and every download 404s.
 
 ## MCP client snippets
 
@@ -143,12 +167,28 @@ cd nautobot
 docker compose -f docker-compose.yml -f docker-compose.build.yml build nautobot
 ```
 
-The **database** image does not, and is meant to be pulled. It bakes in a
-pre-seeded SQL artifact that is deliberately not committed — CI produces it
-after the estate's inherited credentials have been reset. Building it on a
-clean clone fails at that missing file, which is the intended outcome: an
-empty database image that looks like a working demo would be worse than a
-build error. See the host README for the detail.
+The **database** image is host-specific, and the two hosts differ here for a
+real reason.
+
+**Nautobot's** is meant to be pulled. It bakes in a pre-seeded SQL artifact
+that is deliberately not committed, produced outside this repository after the
+estate's inherited credentials have been reset — that estate descends from a
+live instance. Building it on a clean clone fails at the missing file, which is
+the intended outcome: an empty database image that looks like a working demo
+would be worse than a build error.
+
+**Paperless's** builds from a clean clone, because its archive is generated
+from fiction by scripts committed here and has no inherited credentials to
+reset:
+
+```bash
+cd paperless
+FRISIAN_MCP_LOCAL_WHEEL=<wheel> ./seed/seed.sh
+docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
+```
+
+Do not "align" the two. The asymmetry follows from where each estate came
+from.
 
 ## Publishing
 

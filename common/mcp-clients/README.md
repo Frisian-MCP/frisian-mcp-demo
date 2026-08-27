@@ -1,17 +1,24 @@
 # MCP client snippets
 
 Ready-to-paste client configuration and raw JSON-RPC smoke tests for the local
-demo started by:
+demos.
+
+## Which host
+
+Two demo hosts ship in this repository, on different ports so both can run at
+once. Everything from "The demo identities" down to "Paths" describes the
+**Nautobot** host; the **Paperless** host has its own section at the bottom.
+
+| host | start it with | base URL | client template |
+|---|---|---|---|
+| Nautobot | `cd nautobot && docker compose up` | `http://127.0.0.1:8080` | [`nautobot.mcp.json.template`](nautobot.mcp.json.template) |
+| Paperless-ngx | `cd paperless && docker compose up` | `http://127.0.0.1:8081` | [`paperless.mcp.json.template`](paperless.mcp.json.template) |
+
+The `curl-*.sh` scripts default to the Nautobot host. Set `BASE_URL` to reach
+the other one:
 
 ```bash
-cd nautobot
-docker compose up
-```
-
-Default local base URL:
-
-```text
-http://127.0.0.1:8080
+BASE_URL="http://127.0.0.1:8081" TOKEN=... ROUTE=mcp/read-only ./curl-tools-list.sh
 ```
 
 ## The demo identities
@@ -124,5 +131,91 @@ Available groups: `dcim`, `ipam`, `circuits`, `tenancy`, `virtualization`,
 
 ## Paths
 
-Run these scripts from this directory, or from `nautobot/` as
+Run these scripts from this directory, or from a host directory as
 `../common/mcp-clients/curl-help.sh`.
+
+---
+
+# The Paperless-ngx host
+
+```bash
+cd paperless
+docker compose up
+```
+
+```text
+http://127.0.0.1:8081
+```
+
+Everything above about *mechanism* applies unchanged — the same route model,
+the same tier ceilings, the same permission-aware discovery. What differs is
+the estate, the groups and the identity in the middle.
+
+## The demo identities
+
+| identity | door | tier ceiling | bearer token |
+|---|---|---|---|
+| `demo-readonly` | `/mcp/read-only/` | `read` | `frisian-demo-readonly-token-public-do-not-reuse` |
+| `demo-editor` | `/mcp/read-write/` | `read_write` | `frisian-demo-editor-token-public-do-not-reuse` |
+| `demo-admin` | `/mcp/ops/` | `admin` | `frisian-demo-admin-token-public-do-not-reuse` |
+
+`readonly` and `admin` are deliberately the same token strings as the Nautobot
+host uses: an identity that means the same thing on both surfaces should not
+need a different line in a client config. Only the scoped writer differs,
+because the scoped writer is host-specific by nature.
+
+`demo-editor` can write only `Document` and `Tag`, even though its door permits
+the write tier across all five scoped groups. **A refusal there is the feature,
+not a bug.**
+
+## Available groups
+
+`documents`, `classification`, `mail`, `workflow`, `monitoring` — and, on the
+admin door only, `sharing` and `system`.
+
+## The comparison worth running
+
+Unlike the Nautobot host, `tools/list` lengths ARE meaningful here — and the
+middle door is the smallest:
+
+```bash
+BASE_URL="http://127.0.0.1:8081" TOKEN="frisian-demo-readonly-token-public-do-not-reuse" \
+  ROUTE=mcp/read-only ./curl-tools-list.sh      # 5
+
+BASE_URL="http://127.0.0.1:8081" TOKEN="frisian-demo-editor-token-public-do-not-reuse" \
+  ROUTE=mcp/read-write ./curl-tools-list.sh     # 4  <- fewer, not more
+
+BASE_URL="http://127.0.0.1:8081" TOKEN="frisian-demo-admin-token-public-do-not-reuse" \
+  ROUTE=mcp/ops ./curl-tools-list.sh            # 7
+```
+
+`system` and `sharing` are off both scoped allow-lists. `workflow` is denied on
+the read-write door only: a WorkflowAction carries webhook URLs, bodies and
+headers and the engine fires them on document events, so browsing the
+automation catalogue is harmless and writing it is not. On the read door the
+`read` tier ceiling already makes those writes impossible, so the catalogue can
+stay.
+
+It is a route-level deny, so it holds for the superuser too:
+
+```bash
+BASE_URL="http://127.0.0.1:8081" TOKEN="frisian-demo-admin-token-public-do-not-reuse" \
+  ROUTE=mcp/read-write ./curl-tools-list.sh     # still 4
+```
+
+The sharper demonstration is still one level down, and it is a single
+dispatcher split by one principal's permissions:
+
+```bash
+# demo-editor, read-write door, ONE group: `tag` has write actions,
+# `correspondent` does not. Same door, same dispatcher, same request.
+BASE_URL="http://127.0.0.1:8081" TOKEN="frisian-demo-editor-token-public-do-not-reuse" \
+  ROUTE=mcp/read-write ./curl-help.sh classification
+```
+
+```bash
+# The tier ceiling, independent of any permission: the admin token on the
+# read-only door still gets no write action.
+BASE_URL="http://127.0.0.1:8081" TOKEN="frisian-demo-admin-token-public-do-not-reuse" \
+  ROUTE=mcp/read-only ./curl-help.sh classification
+```
