@@ -1,11 +1,54 @@
-# Getting started — a first agent session
+# Getting started
 
 You have `docker compose up` running and the stack is healthy. This is what to
 actually do with it.
 
 Everything below assumes the default `http://127.0.0.1:8081`.
 
-## 1. Point your agent at all three doors
+## 1. Log in and look at the archive
+
+**Do this first, before connecting any agent.**
+
+```text
+http://127.0.0.1:8081
+```
+
+| username | password |
+|---|---|
+| `demo-readonly` | `frisian-demo-public-password` |
+| `demo-editor` | `frisian-demo-public-password` |
+| `demo-admin` | `frisian-demo-public-password` |
+
+One password, all three accounts. They are published demo constants, not
+placeholders to substitute — see the safety banner in
+[`README.md`](README.md) for why that is deliberate and why this stack stays
+on loopback.
+
+Start as `demo-admin` and have a look at what is in there:
+
+- **24 documents**, six correspondents, two years of dates
+- **8 tags** — `unpaid`, `tax-2026`, `medical`, `legal`, `warranty` …
+- **3 custom fields** — account number, amount due, due date
+- **2 saved views** on the dashboard — *Unpaid invoices*, *Tax year 2026*
+- open any document: the original PDF, its thumbnail and a searchable text
+  layer are all really there, so preview, download and full-text search work
+
+This is the point of doing it first: **it is the ground truth you will compare
+the agent against.** When an agent tells you there are four unpaid invoices,
+you want to already know whether that is right.
+
+It is also how you check an agent's writes. Have one retag a document, then
+refresh the browser and watch it change.
+
+> **All three accounts see the same 24 documents in the browser**, and that is
+> correct rather than a bug. The web UI and the REST API answer to Paperless's
+> own permission layer, where all three hold `view` on documents. What differs
+> between the three identities is the **MCP tool surface** — which operations
+> each one is even offered — and that is what the rest of this document is
+> about. If you want to see the difference in the browser, try *editing* as
+> `demo-readonly`.
+
+## 2. Point your agent at all three doors
 
 Copy the configuration for your client:
 
@@ -31,7 +74,7 @@ a difference from one connection.
 > per server. Three doors plus a browser is fine here; be aware of it if you
 > add more clients.
 
-## 2. Ask the read-only agent what it can see
+## 3. Ask the read-only agent what it can see
 
 > "What MCP tools do you have for the paperless read-only server?"
 
@@ -42,7 +85,7 @@ this door — and **absent from a route is byte-identical to never-registered**,
 so the agent has no way to tell a carved-out group from one that was never
 installed. There is no forbidden response to probe against.
 
-## 3. Ask it something real
+## 4. Ask it something real
 
 > "Which invoices are unpaid, and who are they from? What is the total?"
 
@@ -58,7 +101,7 @@ Follow up with something that exercises full-text search:
 The corpus is born-digital PDFs with a real text layer, so the content is
 genuinely indexed. This is not a metadata-only demo.
 
-## 4. Now ask the same agent to change something
+## 5. Now ask the same agent to change something
 
 > "Rename the `urgent` tag to `needs-attention`."
 
@@ -68,7 +111,7 @@ it out before any permission was consulted. Try it with the **admin** token
 against the same read-only door and it is still absent — the ceiling narrows
 regardless of who is asking, and it never grants.
 
-## 5. Switch to the read-write door and try again
+## 6. Switch to the read-write door and try again
 
 > "Using the paperless read-write server, rename the `urgent` tag to
 > `needs-attention`."
@@ -93,7 +136,7 @@ five groups; the principal permits two models; the stricter of the two wins.
 If you find yourself widening the grant to make it succeed, you have turned
 the demo off.
 
-## 6. Compare the two write-capable doors
+## 7. Compare the two write-capable doors
 
 > "Compare the tools on the paperless read-write server with the ones on the
 > paperless ops server. What is on one and not the other?"
@@ -106,7 +149,7 @@ harmless; writing them is not.
 
 More tier does not mean more surface.
 
-## 7. Look at the token accounting
+## 8. Look at the token accounting
 
 Every response carries a token count, and it is visible to the model as well as
 to you (`FRISIAN_MCP_USAGE_REPORTING` and `FRISIAN_MCP_USAGE_IN_CONTENT` in
@@ -118,7 +161,7 @@ Watch the counter, and watch what happens when the response is too big to
 return in one piece — the server hands back a continuation token rather than
 truncating or blowing the context.
 
-## 8. Break it and put it back
+## 9. Break it and put it back
 
 Everything in the archive is disposable:
 
@@ -132,7 +175,7 @@ application image. Measured end to end on a warm machine: **22 seconds** from
 `up` to a stack answering requests, of which the application's own init is
 about seven.
 
-## 9. Read the config
+## 10. Read the config
 
 `config/paperless_frisian_mcp.py` is mounted from your clone, not baked in.
 It is the entire demo: the three routes, the seven dispatch groups, the deny
