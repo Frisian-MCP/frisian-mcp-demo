@@ -113,7 +113,7 @@ published constants — reproducible in every build, and not secrets.
 |---|---|---|---|
 | `demo-readonly` | `mcp/read-only` | `read` | `view` on the scoped estate |
 | `demo-netops` | `mcp/read-write` | `read_write` | `view` on all scoped apps; **write on `dcim` and `ipam` only** |
-| `demo-admin` | `mcp/admin` | `admin` | superuser |
+| `demo-admin` | `mcp/ops` | `admin` | superuser |
 
 ```text
 demo-readonly   Bearer frisian-demo-readonly-token-public-do-not-reuse
@@ -244,7 +244,7 @@ the job catalogue browsable. Credential material is absent from both.
 ### 4. What the scoped doors hide is really there
 
 ```bash
-TOKEN="frisian-demo-admin-token-public-do-not-reuse" ROUTE="mcp/admin" \
+TOKEN="frisian-demo-admin-token-public-do-not-reuse" ROUTE="mcp/ops" \
   ../common/mcp-clients/curl-tools-list.sh
 ```
 
@@ -355,7 +355,8 @@ client_id      frisian-demo-public-client-id
 client_secret  frisian-demo-public-client-secret-do-not-reuse
 ```
 
-Registered redirect URIs:
+Registered redirect URIs — both loopback spellings on purpose, because the
+callback is followed by a **browser**, which does not care which one you typed:
 
 ```text
 https://claude.ai/api/mcp/auth_callback
@@ -367,9 +368,15 @@ A spec-compliant client that receives a `401` follows the standard discovery
 cascade to find the authorization server, so it does not have to guess:
 
 ```console
-$ curl -s http://localhost:8080/.well-known/oauth-authorization-server
-{"authorization_endpoint": "http://localhost:8080/oauth/authorize/", ...}
+$ curl -s http://127.0.0.1:8080/.well-known/oauth-authorization-server
+{"issuer": "http://127.0.0.1:8080", "authorization_endpoint": "http://127.0.0.1:8080/oauth/authorize/", ...}
 ```
+
+The origin here is `127.0.0.1`, not `localhost`, and that is load-bearing
+rather than a style choice. The same value is echoed as `resource` in the
+protected-resource metadata, and RFC 9728 has the client compare that against
+the URL it connected to **as a string** — so a mismatch refuses a client whose
+only mistake was using the address the rest of this repo tells it to use.
 
 An approval screen always renders before anything is issued — automatic
 approval is off, so consent cannot be skipped or replayed from a stored
@@ -377,7 +384,7 @@ decision:
 
 ```console
 $ curl -s -o /dev/null -w '%{http_code}\n' \
-    'http://localhost:8080/oauth/authorize/?client_id=frisian-demo-public-client-id&...'
+    'http://127.0.0.1:8080/oauth/authorize/?client_id=frisian-demo-public-client-id&...'
 200      # "An application is requesting access to this MCP server."  Allow / Deny
 ```
 

@@ -17,8 +17,8 @@ url = "http://127.0.0.1:8080/mcp/read-write"
 [mcp_servers.nautobot-read-write.http_headers]
 Authorization = "Bearer frisian-demo-netops-token-public-do-not-reuse"
 
-[mcp_servers.nautobot-admin]
-url = "http://127.0.0.1:8080/mcp/admin"
+[mcp_servers.nautobot-ops]
+url = "http://127.0.0.1:8080/mcp/ops"
 
-[mcp_servers.nautobot-admin.http_headers]
+[mcp_servers.nautobot-ops.http_headers]
 Authorization = "Bearer frisian-demo-admin-token-public-do-not-reuse"

@@ -218,7 +218,7 @@ golden_config|compliancefeature|1|the rule needs a feature to attach to
 
 while IFS='|' read -r grp res want why; do
   [ -z "${grp:-}" ] && continue
-  resp=$(mcp "$TOK_ADM" "mcp/admin" "$grp" "$res" "list" '{"limit":1}')
+  resp=$(mcp "$TOK_ADM" "mcp/ops" "$grp" "$res" "list" '{"limit":1}')
   got=$(extract_count "$resp")
   if [ -z "$got" ]; then
     bad "$grp/$res — could not read a count (surface error, not a count mismatch)"
@@ -247,7 +247,7 @@ EOF
 # a null second end would pass. Each peerendpoint display is a single address
 # with no escapes, so checking them individually has no such blind spot.
 hdr "3b. The BGP peering resolves at both ends"
-resp=$(mcp "$TOK_ADM" "mcp/admin" "bgp" "peerendpoint" "list" '{}')
+resp=$(mcp "$TOK_ADM" "mcp/ops" "bgp" "peerendpoint" "list" '{}')
 eps=$(printf '%s' "$resp" | grep -o '\\"display\\": \\"[^\\]*' | sed 's/.*\\"//')
 n_total=$(printf '%s\n' "$eps" | grep -c . )
 n_bad=$(printf '%s\n' "$eps" | grep -c '^None$' )
@@ -334,7 +334,7 @@ done
 
 # The admin door must expose what the scoped doors made absent. That contrast
 # is the demonstration, so it is asserted rather than assumed.
-adm_groups=$(mcp_list_tools "$TOK_ADM" "mcp/admin" | grep -o '"name": "[a-z_]*"' | sed 's/"name": "//;s/"//' | sort -u)
+adm_groups=$(mcp_list_tools "$TOK_ADM" "mcp/ops" | grep -o '"name": "[a-z_]*"' | sed 's/"name": "//;s/"//' | sort -u)
 for g in users vpn load_balancers; do
   if printf '%s\n' "$adm_groups" | grep -qx "$g"; then
     ok "admin door exposes '$g' (absent on the scoped doors — the contrast)"
@@ -374,7 +374,7 @@ done
 # the broken case. Asserting that /mcp/ IS 404 is what distinguishes them:
 # this config sets no FRISIAN_MCP_PATH, so the default mount must not exist.
 hdr "M1. MANDATORY — the per-route doors are really mounted"
-for p in "mcp/read-only" "mcp/read-write" "mcp/admin"; do
+for p in "mcp/read-only" "mcp/read-write" "mcp/ops"; do
   code=$(http_code -X POST -H 'Content-Type: application/json' \
           -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' "${BASE_URL}/${p}/")
   if [ "$code" = "404" ]; then

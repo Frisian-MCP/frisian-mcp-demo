@@ -28,7 +28,7 @@ SAFETY
     warned about — it is simply never read. Measured on 1.0.12:
 
       * the three doors below are never mounted; /mcp/read-only,
-        /mcp/read-write and /mcp/admin all return 404
+        /mcp/read-write and /mcp/ops all return 404
       * everything collapses onto the package's default /mcp/ mount
       * allow_list and deny_list therefore carve NOTHING, and a read-tier
         token was observed invoking extras -> secret and
@@ -391,8 +391,23 @@ FRISIAN_MCP_ROUTES = {
     },
     # Full surface, full tier. What the scoped doors made absent is present
     # here — that contrast is the demonstration.
+    #
+    # ⚠️ THE PATH IS `mcp/ops`, NOT `mcp/admin`, AND THAT IS NOT COSMETIC.
+    #
+    # An MCP client connecting to `/mcp/admin` STRIPS THE SUFFIX and retries
+    # the bare URL, so the caller lands on a different route and authenticates
+    # against the read-write tier instead. The admin door is silently absorbed
+    # by the write path — it resolves, it answers, and it answers with the
+    # wrong ceiling. Nothing on the wire says the route you asked for is not
+    # the route you got.
+    #
+    # The route KEY and `highest_tier` are still "admin"; only the URL segment
+    # changed, because the URL is the only part the client rewrites.
+    #
+    # Do not rename this back for tidiness. Same reason the server entries in
+    # .mcp.json / .cursor/mcp.json / .codex/config.toml are `nautobot-ops`.
     "admin": {
-        "path": "mcp/admin",
+        "path": "mcp/ops",
         "highest_tier": "admin",
         "allow_list": ["*"],
     },
@@ -501,8 +516,24 @@ FRISIAN_MCP_HMAC_KEY = os.getenv(
 # Public origin as the client reaches it. The demo is loopback-bound by
 # default; override when fronting it with anything else, or OAuth redirects
 # will point somewhere the browser cannot follow.
+#
+# ⚠️ `127.0.0.1`, NOT `localhost`, AND THE TWO ARE NOT INTERCHANGEABLE HERE.
+#
+# This value is echoed verbatim as `resource` in the protected-resource
+# metadata a 401 points at. RFC 9728 has the client check that `resource`
+# matches the URL it actually connected to, and it is a STRING comparison —
+# `http://localhost:8080/mcp/ops` does not match a connection to
+# `http://127.0.0.1:8080/mcp/ops`, however identical the two hosts are.
+#
+# Everything else in this demo says 127.0.0.1: the compose bind, all three
+# shipped client configs, and the docs. This said `localhost`, so a strict
+# OAuth client was refused by its own origin check — and the failure reads as
+# a broken server rather than a mismatched string.
+#
+# Browsers tolerate either, so the consent screen is unaffected. The MCP
+# client is the one doing the comparison, so the connection URL wins.
 FRISIAN_MCP_OAUTH_ISSUER = os.getenv(
-    "FRISIAN_MCP_OAUTH_ISSUER", "http://localhost:8080"
+    "FRISIAN_MCP_OAUTH_ISSUER", "http://127.0.0.1:8080"
 )
 
 # Zero, not two. The upstream deployment sat behind an ALB plus an nginx
@@ -587,11 +618,25 @@ FRISIAN_MCP_BULK_CREATE_RESOURCES = "*"
 # ---------------------------------------------------------------------------
 # Dispatcher groups — Nautobot 3.x core plus the four plugin surfaces.
 #
-# Carried across verbatim from the upstream deployment's config, where they
-# were verified against the live registered resources. Basenames follow DRF
-# convention: Model._meta.object_name.lower(). A group whose basenames match no
-# registered resource produces a startup WARNING and is skipped, so listing a
-# surface that is not installed costs nothing.
+# Basenames follow DRF convention: Model._meta.object_name.lower().
+#
+# ⚠️ THIS LIST IS AN ALLOW-LIST, AND THE PACKAGE DOES NOT WARN ABOUT WHAT IT
+# OMITS. The asymmetry is the trap:
+#
+#   listed but NOT registered   -> startup WARNING, group entry skipped. Safe.
+#   registered but NOT listed   -> published as ~10 FLAT tools. SILENT.
+#
+# So a Nautobot upgrade that adds a model silently adds a pile of ungrouped
+# tools, and `nautobot-server check` still reports "no issues". Measured on
+# 3.2.3: cabletype, cabletocabletermination (dcim/0086, dcim/0088) and
+# ipaddressrange (ipam/0057) were absent from this list and appeared as 30 flat
+# tools on the ops door — against 17 dispatchers, on the one door that shows
+# the full surface, undercutting exactly the "N endpoints collapse into 17
+# tools" point the demo exists to make. They are folded in below.
+#
+# WHEN YOU BUMP NAUTOBOT, RE-DERIVE THIS LIST. Compare the ops door's
+# tools/list against the dispatchers: anything flat is a resource no group
+# claims.
 # ---------------------------------------------------------------------------
 FRISIAN_MCP_DISPATCH_GROUPS = {
     "dcim": [
@@ -600,7 +645,8 @@ FRISIAN_MCP_DISPATCH_GROUPS = {
         "interface", "interfacetemplate",
         "interfaceredundancygroup", "interfaceredundancygroupassociation",
         "interfacevdcassignment",
-        "cable", "location", "locationtype",
+        "cable", "cabletype", "cabletocabletermination",
+        "location", "locationtype",
         "manufacturer", "devicetype", "devicefamily", "deviceredundancygroup",
         "devicebay", "devicebaytemplate",
         "devicetypetosoftwareimagefile", "deviceclusterassignment",
@@ -629,7 +675,7 @@ FRISIAN_MCP_DISPATCH_GROUPS = {
         "interfaceconnections", "powerconnections",
     ],
     "ipam": [
-        "ipaddress", "ipaddresstointerface",
+        "ipaddress", "ipaddressrange", "ipaddresstointerface",
         "prefix", "prefixlocationassignment",
         "vlan", "vlangroup", "vlanlocationassignment",
         "vrf", "vrfdeviceassignment", "vrfprefixassignment",

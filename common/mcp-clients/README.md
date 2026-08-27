@@ -31,7 +31,7 @@ not secrets, and they are also not reusable for anything else.
 |---|---|---|---|
 | `demo-readonly` | `/mcp/read-only/` | `read` | `frisian-demo-readonly-token-public-do-not-reuse` |
 | `demo-netops` | `/mcp/read-write/` | `read_write` | `frisian-demo-netops-token-public-do-not-reuse` |
-| `demo-admin` | `/mcp/admin/` | `admin` | `frisian-demo-admin-token-public-do-not-reuse` |
+| `demo-admin` | `/mcp/ops/` | `admin` | `frisian-demo-admin-token-public-do-not-reuse` |
 
 `demo-netops` can write only `dcim` and `ipam`, even though its door permits
 the write tier across every scoped group. The door's ceiling and the
@@ -95,7 +95,7 @@ reader who compares 12 against 12 concludes nothing is happening, and a reader
 who compares 12 against 13 draws the wrong lesson from a single group. Use
 `help` below, where the per-identity difference is plain.
 
-The `/mcp/admin/` door carves nothing, so no candidate set is narrowed first and
+The `/mcp/ops/` door carves nothing, so no candidate set is narrowed first and
 the spread is obvious: 23, 38, and 47 tools for `demo-readonly`, `demo-netops`,
 and `demo-admin`, all against the same URL.
 
