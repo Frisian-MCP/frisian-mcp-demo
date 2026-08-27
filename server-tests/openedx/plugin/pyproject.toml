@@ -1,0 +1,26 @@
+# Packaging for the Open edX plugin app.
+#
+# It exists so the app can be installed into the LMS image with a normal
+# `pip install`, which is what Tutor's OPENEDX_EXTRA_PIP_REQUIREMENTS expects.
+# Copying the directory into the platform tree also works and is what the
+# install doc describes; a wheel is cleaner because it does not touch the
+# platform tree at all.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openedx-frisian-mcp"
+version = "0.1.0"
+description = "Open edX plugin app that mounts frisian-mcp's MCP, OAuth and well-known URLs in the LMS"
+requires-python = ">=3.11"
+
+# frisian-mcp is deliberately NOT a dependency here.
+#
+# The LMS image installs it separately, and pinning it from this side would
+# give two places that decide the version. This package only knows how to WIRE
+# it up; it has no opinion about which version is wired.
+dependencies = []
+
+[tool.setuptools]
+packages = ["openedx_frisian_mcp"]

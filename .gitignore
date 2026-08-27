@@ -43,3 +43,8 @@ paperless/wheels/*.whl
 # The generated document corpus. Reproducible from paperless/seed/corpus.py,
 # so committing it would add binary churn for no gain.
 paperless/seed/out/
+
+# Python build artifacts from the server-test harnesses. `pip wheel` leaves
+# these beside the source it builds; they are outputs, not inputs.
+server-tests/**/build/
+server-tests/**/*.egg-info/

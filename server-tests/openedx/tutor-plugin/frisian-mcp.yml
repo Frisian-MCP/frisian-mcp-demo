@@ -1,0 +1,140 @@
+# Tutor plugin — installs frisian-mcp into the Open edX LMS and configures it.
+#
+# Enable with:
+#     cp frisian-mcp.yml "$(tutor plugins printroot)"/
+#     tutor plugins enable frisian-mcp
+#     tutor config save
+#     tutor images build openedx      # REQUIRED: the two patches below change the image
+#     tutor local start -d
+#
+# ⚠️ THE IMAGE MUST BE REBUILT. The first patch adds pip installs to the
+# openedx Dockerfile, so enabling this plugin without `tutor images build
+# openedx` leaves you running the stock image with the settings of a modified
+# one — Django then fails at startup on an INSTALLED_APPS entry it cannot
+# import, which reads as a settings bug rather than a missing rebuild.
+#
+# ⚠️ THIS IS A TEST HARNESS, NOT A DEPLOYMENT TEMPLATE. It pins a published
+# HMAC key and a loopback issuer so a validation run is reproducible. Both are
+# called out below; neither is safe to carry into a real deployment.
+
+name: frisian-mcp
+version: 0.1.0
+
+patches:
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Install the package and the plugin app into the LMS image.
+  #
+  # Both come from LOCAL WHEELS, and both have to, for different reasons:
+  #
+  #   frisian-mcp        the version carrying the per-route model and the
+  #                      H3/H9 hardening is not published — PyPI's newest is
+  #                      1.0.12. Same constraint the demo hosts run under.
+  #
+  #   openedx-frisian-mcp  the install doc says a reference implementation
+  #                      ships in the package repo. It does not (finding
+  #                      OX-2), so this is the ported one from
+  #                      server-tests/openedx/plugin/.
+  #
+  # The wheels are staged into the image build context by
+  # server-tests/openedx/stage-wheels.sh, because a Dockerfile COPY can only
+  # see files inside that context.
+  # ───────────────────────────────────────────────────────────────────────
+  openedx-dockerfile-post-python-requirements: |
+    COPY --chown=app:app ./frisian-wheels /tmp/frisian-wheels
+    RUN pip install --no-cache-dir /tmp/frisian-wheels/*.whl \
+     && python -c "import frisian_mcp, openedx_frisian_mcp; print('frisian-mcp', frisian_mcp.__version__ if hasattr(frisian_mcp,'__version__') else 'installed')"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # LMS production settings.
+  #
+  # Derived from docs/installs/Django/openedx/sumac/lms/envs/mcp_prod.py,
+  # adapted to Tutor. Deviations from that file are commented where they
+  # occur rather than silently applied.
+  # ───────────────────────────────────────────────────────────────────────
+  openedx-lms-production-settings: |
+    # ── frisian-mcp ────────────────────────────────────────────────────────
+    INSTALLED_APPS = list(INSTALLED_APPS) + [
+        "frisian_mcp",
+        "frisian_mcp.contrib.oauth",
+        "frisian_mcp.contrib.tokens",
+        # The plugin app. Open edX injects third-party URLs through
+        # edx_django_utils.plugins rather than ordinary Django routing, so
+        # frisian-mcp's own AppConfig.ready() auto-injection — which is what
+        # makes it zero-wiring everywhere else — does not fire here.
+        "openedx_frisian_mcp",
+    ]
+
+    FRISIAN_MCP_PATH = "mcp"
+
+    # Deny unauthenticated callers entirely.
+    #
+    # NOTE, and this is why the permission class below is not redundant: on
+    # released builds up to and including 1.1.0 the UNAUTHENTICATED_TIER
+    # lockdown path is a no-op. It reads like a lock and is not one. The real
+    # gate is FRISIAN_MCP_PERMISSION_CLASSES.
+    FRISIAN_MCP_UNAUTHENTICATED_TIER = None
+    FRISIAN_MCP_ALLOW_UNAUTHENTICATED = False
+    FRISIAN_MCP_PERMISSION_CLASSES = ["rest_framework.permissions.IsAuthenticated"]
+
+    # Static tokens BEFORE OAuth. Both claim the `Bearer` prefix and both raise
+    # on a lookup miss, so whichever runs first against a foreign token stops
+    # the chain — and DRF builds the 401 challenge from the FIRST class. With
+    # OAuth first, a valid static token gets an OAuth challenge and compliant
+    # clients bounce with "does not support dynamic client registration".
+    FRISIAN_MCP_AUTHENTICATION_CLASSES = [
+        "frisian_mcp.contrib.tokens.authentication.FrisianMcpTokenAuthentication",
+        "frisian_mcp.contrib.oauth.authentication.OAuthTokenAuthentication",
+    ]
+
+    # ⚠️ TEST HARNESS VALUES — a published constant and a loopback origin.
+    # Fixed so a validation run is reproducible. Never deploy either.
+    FRISIAN_MCP_HMAC_KEY = "frisian-openedx-servertest-key-public-do-not-reuse"
+    FRISIAN_MCP_OAUTH_ISSUER = "http://local.openedx.io:8082"
+
+    # Every minting path closed, as the reference settings have them.
+    FRISIAN_MCP_OAUTH_REGISTRATION_OPEN = False
+    FRISIAN_MCP_OAUTH_AUTO_APPROVE = False
+    FRISIAN_MCP_OAUTH_PKCE_AUTO_REGISTER = False
+    FRISIAN_MCP_OAUTH_PKCE_DEFAULT_PERMISSION = "read"
+
+    # Caddy terminates in front of the LMS in a Tutor deployment, so the
+    # issuer and redirect URIs must be built from forwarded headers.
+    FRISIAN_MCP_TRUST_PROXY = True
+    FRISIAN_MCP_TRUSTED_PROXY_COUNT = 1
+
+    # The demo features, on, so the test exercises them.
+    FRISIAN_MCP_PERMISSION_AWARE_DISCOVERY = True
+    FRISIAN_MCP_USAGE_REPORTING = True
+    FRISIAN_MCP_USAGE_IN_CONTENT = True
+    FRISIAN_MCP_TOOLS_LIST_CACHE_TTL = 300
+
+    # ── Dispatch groups ────────────────────────────────────────────────
+    # Verbatim from docs/installs/Django/openedx/sumac/lms/envs/mcp_prod.py.
+    # The doc claims these bundle 78 auto-discovered actions into 9 tools;
+    # validating that claim is part of this test.
+    FRISIAN_MCP_DISPATCH_GROUPS = {
+        "users": ["accounts", "me", "user", "user_agreements", "userpreference", "name_change"],
+        "enrollments": ["enrollments", "entitlements", "creditcourse", "creditprovider"],
+        "lti": ["lti_ags_view", "lti_nrps_memberships_view"],
+        "data": ["data", "key_value"],
+        "organizations": ["organization", "saml_configuration"],
+        "assessment": ["assessment_feedback"],
+        "auth": ["create_token", "confirm", "search_emails"],
+        "retirement": [
+            "cancel_retirement", "retire", "retire_misc",
+            "retirement_cleanup", "retirement_partner_report",
+            "retirement_queue", "retirement_status",
+            "retirements_by_status_and_date", "update_retirement_status",
+        ],
+        "xqueue": ["xqueue"],
+    }
+
+    # Platform ViewSets cannot be decorated with @mcp_heavy without editing
+    # platform source, so large responses are negotiated by threshold instead.
+    FRISIAN_MCP_AUTO_NEGOTIATE_THRESHOLD = 8_000
+
+    # OAuth PKCE stores authorization codes in the DEFAULT cache. Open edX's
+    # own settings use a real backend under Tutor, but this is the assumption
+    # that breaks silently on any deployment configured with DummyCache — the
+    # flow completes and the code is simply gone.
