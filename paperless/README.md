@@ -428,7 +428,10 @@ over MCP is not a subject the MCP Contributors Groups have open — neither the
 Interest Group nor the Working Group — so there is no specified behaviour to
 implement against. frisian-mcp does not support it, deliberately, because
 handing arbitrary binary content to a host agent is a hazard we are not
-prepared to take on without a specification behind it.
+prepared to take on without a specification and security behind it.  Even if
+a standard is added to the protocol for binary over MCP this will require
+extensive testing to ensure this package continues to provide secure and
+reliable MCP connections, for both the systems and client agents.
 
 Two consequences worth knowing before you plan around them:
 
