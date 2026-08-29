@@ -410,6 +410,42 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
 The seed step is not optional the first time: both images bake an artifact that
 step produces, and neither artifact is committed to git.
 
+## Binary responses are not supported, on purpose
+
+Paperless is a document archive, so the first thing many people try is
+`document.download`. It does not work, and it is not going to:
+
+```json
+{"error": "Failed to serialise response: 'utf-8' codec can't decode byte 0xbf
+           in position 10: invalid start byte", "status_code": 500}
+```
+
+`preview`, `thumb` and `download` all fail the same way — the response layer
+runs file bytes through a UTF-8 decode.
+
+**This is a scope decision, not a bug to report.** Returning binary payloads
+over MCP is not a subject the MCP Contributors Groups have open — neither the
+Interest Group nor the Working Group — so there is no specified behaviour to
+implement against. frisian-mcp does not support it, deliberately, because
+handing arbitrary binary content to a host agent is a hazard we are not
+prepared to take on without a specification and security behind it.  Even if
+a standard is added to the protocol for binary over MCP this will require
+extensive testing to ensure this package continues to provide secure and
+reliable MCP connections, for both the systems and client agents.
+
+Two consequences worth knowing before you plan around them:
+
+- **The actions stay visible.** They are discovered from the ViewSet like every
+  other action, so an agent can see `download` and try it. The failure is at
+  serialisation, not at discovery. If that matters for your deployment, deny
+  the resource on the route rather than expecting the action to disappear.
+- **The metadata is fine.** Everything *about* a document — `metadata`,
+  `notes`, `history`, `suggestions`, full-text `query` with scored highlights —
+  works normally. It is only the file bytes that do not cross the boundary.
+
+If you need the file itself, fetch it from Paperless's own REST API with a
+Paperless token. That path is unchanged and unaffected by frisian-mcp.
+
 ## What is deliberately not here
 
 - **No Paperless source.** The application image is built `FROM` the published
@@ -420,3 +456,7 @@ step produces, and neither artifact is committed to git.
   public document URL. A carve-out is demonstrated by absence from a door,
   which does not require an instance to exist.
 - **No unauthenticated mode.** See the posture note at the top.
+- **No binary responses.** `document.preview`, `document.thumb` and
+  `document.download` are auto-discovered from the ViewSet and are visible in
+  the dispatcher, but they do not return a file. Calling one gets an error, and
+  that is the intended behaviour rather than a defect — see below.
