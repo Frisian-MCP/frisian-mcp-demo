@@ -279,6 +279,40 @@ convention, which is exactly why it needs the assertion.
 
 ---
 
+## Binary responses are out of scope, for every host
+
+A host application's ViewSets are discovered wholesale, so any action that
+returns a file — a download, a preview, a thumbnail, an export — becomes a
+visible MCP action. **None of them return the file.** The response layer
+serialises to text, and file bytes fail that decode:
+
+```
+Failed to serialise response: 'utf-8' codec can't decode byte 0xbf ...
+```
+
+**This is deliberate and it is not a defect to file.** Returning binary
+payloads over MCP is not a subject the MCP Contributors Groups have open —
+neither the Interest Group nor the Working Group — so there is no specified
+behaviour to build against, and handing arbitrary binary content to a host
+agent is a hazard this project will not take on ahead of a specification.
+
+What that means when you add a host:
+
+- **Expect the actions to be visible and to fail.** Discovery does not know a
+  response will be binary; the failure happens at serialisation. Do not treat
+  a `document.download`-shaped error as a bug in the host's configuration.
+- **Say so in the host README** if the host is one where people will
+  obviously reach for it. `paperless/` is the worked example — it is a
+  document archive, so `download` is the first thing anyone tries.
+- **Deny the resource on the route** if an action being callable-but-failing
+  is unacceptable for your posture. Making it absent is a route decision;
+  there is no per-action switch for "this returns bytes".
+- **Everything else about the object still works** — metadata, notes,
+  history, search. Only the payload does not cross the boundary.
+
+The file remains reachable through the host application's own API with the
+host's own credentials. That path is untouched.
+
 ## No host source code. Ever.
 
 Dockerfiles and configuration files only. Build `FROM` a published upstream
