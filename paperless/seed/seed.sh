@@ -127,12 +127,19 @@ note "consuming ${EXPECTED} documents"
   cp /usr/src/paperless/demo-seed/*.pdf /usr/src/paperless/consume/
   chown paperless:paperless /usr/src/paperless/consume/*.pdf
 '
-# The running consumer picks these up via inotify. --oneshot is belt and
-# braces: it queues anything the watcher missed and exits, rather than us
-# depending on a filesystem event that a bind mount or an overlay might not
-# deliver.
-"${COMPOSE[@]}" exec -T --user paperless paperless \
-  python3 manage.py document_consumer --oneshot
+# ⚠️ DO NOT ADD `document_consumer --oneshot` HERE. It was here, as "belt and
+# braces in case inotify does not fire on a bind mount", and it is what put 13
+# FAILURE and 10 PENDING tasks into the published demo estate.
+#
+# The running consumer already watches this directory. `--oneshot` rescans it
+# and queues everything still present, so every file gets queued TWICE: the
+# first consume moves the file out, the second finds nothing and fails with
+# "Cannot consume ...: File not found". The failures then ride into demo.sql.gz
+# and every user of the demo sees a task list full of red.
+#
+# The watcher is not a guess — it demonstrably consumes all of them, and the
+# poll below is the safety net if it ever stops doing so. A timeout that says
+# "stalled at 19/24" is a better failure than a silent double-queue.
 
 # Poll rather than sleep. Consumption is asynchronous, and a fixed sleep is
 # either too short (a short estate, silently) or too long (every build).

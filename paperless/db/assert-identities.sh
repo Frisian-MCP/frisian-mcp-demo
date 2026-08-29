@@ -255,6 +255,34 @@ unfiled=$(q "SELECT count(*) FROM documents_document
 [ "$unfiled" -eq 0 ] && note "ok    every document has a correspondent and a type" \
                      || bad "${unfiled} document(s) are unfiled; build_estate.py did not complete"
 
+# ── 10b. The task queue carries no build residue ───────────────────────────
+#
+# ADDED AFTER IT SHIPPED. The published v0.1.0-pre estate carries 13 FAILURE
+# and 10 PENDING PaperlessTask rows, dated to the seed run, because the seed
+# queued every corpus file twice. Nothing here or in the acceptance checklist
+# looked at that table, so it rode into the image and out to the registry.
+#
+# `monitoring/tasks/list` is a documented part of the demo surface, so this is
+# not cosmetic: an agent asking what the instance has been doing was being
+# handed a pile of build artefacts, most of them failures.
+#
+# Asserted as EMPTY rather than "no failures". A SUCCESS row is equally a
+# build-time record — it describes how the estate was made, not what it
+# contains — and "zero failures" would pass on an estate carrying 27 of them.
+if [ "$(q "SELECT count(*) FROM information_schema.tables
+           WHERE table_schema='public' AND table_name='documents_paperlesstask';")" -eq 1 ]; then
+  n=$(q "SELECT count(*) FROM documents_paperlesstask;")
+  if [ "$n" -eq 0 ]; then
+    note "ok    task queue is empty"
+  else
+    bad "task queue carries ${n} build-time row(s):
+$(q "SELECT '            ' || status || ' x' || count(*) FROM documents_paperlesstask GROUP BY status;")
+            These are seed residue, not part of the demo. build_estate.py
+            truncates them; if they are present, either it did not run or the
+            seed re-queued after it did."
+  fi
+fi
+
 # ── 11. The change log starts empty ────────────────────────────────────────
 #
 # Building the estate produces an audit record for every save. That is a
