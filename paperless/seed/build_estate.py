@@ -274,6 +274,27 @@ def build_workflow(tags):
     print("  workflows: 1 (disabled, local action only)")
 
 
+def truncate_build_tasks():
+    """Empty the task queue that BUILDING the estate produced.
+
+    Consuming the corpus creates a `PaperlessTask` row per file, and those rows
+    are a build-time trail exactly like the audit log: they describe how the
+    estate was made, not what it contains. Left in place they ship inside
+    demo.sql.gz, and `monitoring/tasks/list` — a documented part of the demo —
+    hands an agent a pile of build artefacts as though they were the estate.
+
+    This shipped once. The published v0.1.0-pre estate carries 13 FAILURE and
+    10 PENDING rows, because the seed used to queue every file twice (see the
+    note against `--oneshot` in seed.sh). Removing the double-queue stops the
+    failures; truncating here stops the SUCCESS rows too, which were never
+    part of the demo either.
+    """
+    from documents.models import PaperlessTask
+
+    deleted, _ = PaperlessTask.objects.all().delete()
+    print(f"  tasks: {deleted} build-time task row(s) truncated")
+
+
 def truncate_history():
     """Empty the audit trail that BUILDING the estate produced.
 
@@ -305,8 +326,9 @@ def main():
         build_saved_views(tags, types)
         build_workflow(tags)
 
-    # Outside the transaction: it must delete records the transaction above
+    # Outside the transaction: these delete records the transaction above
     # created, and nothing after this point should be able to add more.
+    truncate_build_tasks()
     truncate_history()
     print("Done.")
 
