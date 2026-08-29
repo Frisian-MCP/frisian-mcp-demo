@@ -294,7 +294,16 @@ Failed to serialise response: 'utf-8' codec can't decode byte 0xbf ...
 payloads over MCP is not a subject the MCP Contributors Groups have open —
 neither the Interest Group nor the Working Group — so there is no specified
 behaviour to build against, and handing arbitrary binary content to a host
-agent is a hazard this project will not take on ahead of a specification.
+agent is a hazard this project will not take on without a specification and
+security behind it.
+
+**A specification arriving would not by itself change this.** Any such
+standard would still require extensive testing before this package carried
+it, for the security and reliability of both the host systems and the client
+agents connecting to them. Read the paragraph above as a standing position
+rather than as a queue item waiting on the working group — the hazard is in
+handing arbitrary bytes to an agent, and a specification describing *how* to
+do that does not make doing it safe here.
 
 What that means when you add a host:
 
