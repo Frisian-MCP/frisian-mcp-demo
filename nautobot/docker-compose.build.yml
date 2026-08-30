@@ -17,65 +17,63 @@
 # Dockerfile expects (see db/Dockerfile). It is not committed to this repo —
 # CI injects it at build time. Building the db image locally without it will
 # fail loudly rather than produce an empty demo.
+#
+# Build args must be declared here or they never reach the Dockerfile: compose
+# does NOT forward the environment into a build. Without them the documented
+# escape hatch fails the S-6 guard no matter what the user exports, which is
+# exactly what happened once.
+#
+# All default EMPTY so the guard keeps failing closed — compose must not be the
+# thing that silently picks a lane.
+
+x-build: &build
+  context: .
+  dockerfile: Dockerfile
+  args:
+    FRISIAN_MCP_SPEC: "${FRISIAN_MCP_SPEC:-}"
+    FRISIAN_MCP_LOCAL_WHEEL: "${FRISIAN_MCP_LOCAL_WHEEL:-}"
+    PIP_INDEX_URL: "${PIP_INDEX_URL:-}"
+    PIP_EXTRA_INDEX_URL: "${PIP_EXTRA_INDEX_URL:-}"
+
+# ⚠️ ONLY `nautobot` CARRIES `build:`, AND THAT IS NOT A TIDY-UP.
+#
+# All three application services run the SAME image. Giving all three a build
+# section makes the bake builder try to produce the identical tag three times
+# concurrently, and it fails:
+#
+#     ERROR: image "ghcr.io/frisian-mcp/demo-nautobot:v0.1.0-pre": already exists
+#
+# The image itself builds fine — the error comes from two of the three losing
+# the race to tag it — so the failure reads as a build problem when it is a
+# duplicate-work problem. Measured 2026-08-30; this file previously declared
+# `build:` on nautobot, celery_worker AND celery_beat, which meant the
+# documented escape hatch above did not run to completion.
+#
+# So one service builds it and the other two reference the tag. `pull_policy:
+# never` is what stops them trying to PULL a tag that exists only locally —
+# compose builds every build-service before starting anything, so the image is
+# present by the time they start.
+#
+# The NetBox host's overlay has the same shape for the same reason. If a fourth
+# application service is ever added here, it gets `pull_policy: never`, not a
+# `build:` block.
 
 services:
 
   nautobot:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      # Build args must be declared here or they never reach the Dockerfile:
-      # compose does NOT forward the environment into a build. Without this the
-      # documented escape hatch fails the S-6 guard no matter what the user
-      # exports, which is exactly what happened.
-      #
-      # All default EMPTY so the guard keeps failing closed -- compose must not
-      # be the thing that silently picks a lane.
-      args:
-        FRISIAN_MCP_SPEC: "${FRISIAN_MCP_SPEC:-}"
-        FRISIAN_MCP_LOCAL_WHEEL: "${FRISIAN_MCP_LOCAL_WHEEL:-}"
-        PIP_INDEX_URL: "${PIP_INDEX_URL:-}"
-        PIP_EXTRA_INDEX_URL: "${PIP_EXTRA_INDEX_URL:-}"
+    build: *build
     image: "ghcr.io/frisian-mcp/demo-nautobot:${DEMO_TAG:-v0.1.0}"
+
+  celery_worker:
+    image: "ghcr.io/frisian-mcp/demo-nautobot:${DEMO_TAG:-v0.1.0}"
+    pull_policy: never
+
+  celery_beat:
+    image: "ghcr.io/frisian-mcp/demo-nautobot:${DEMO_TAG:-v0.1.0}"
+    pull_policy: never
 
   db:
     build:
       context: .
       dockerfile: db/Dockerfile
     image: "ghcr.io/frisian-mcp/demo-nautobot-db:${DEMO_TAG:-v0.1.0}"
-
-  celery_worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      # Build args must be declared here or they never reach the Dockerfile:
-      # compose does NOT forward the environment into a build. Without this the
-      # documented escape hatch fails the S-6 guard no matter what the user
-      # exports, which is exactly what happened.
-      #
-      # All default EMPTY so the guard keeps failing closed -- compose must not
-      # be the thing that silently picks a lane.
-      args:
-        FRISIAN_MCP_SPEC: "${FRISIAN_MCP_SPEC:-}"
-        FRISIAN_MCP_LOCAL_WHEEL: "${FRISIAN_MCP_LOCAL_WHEEL:-}"
-        PIP_INDEX_URL: "${PIP_INDEX_URL:-}"
-        PIP_EXTRA_INDEX_URL: "${PIP_EXTRA_INDEX_URL:-}"
-    image: "ghcr.io/frisian-mcp/demo-nautobot:${DEMO_TAG:-v0.1.0}"
-
-  celery_beat:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      # Build args must be declared here or they never reach the Dockerfile:
-      # compose does NOT forward the environment into a build. Without this the
-      # documented escape hatch fails the S-6 guard no matter what the user
-      # exports, which is exactly what happened.
-      #
-      # All default EMPTY so the guard keeps failing closed -- compose must not
-      # be the thing that silently picks a lane.
-      args:
-        FRISIAN_MCP_SPEC: "${FRISIAN_MCP_SPEC:-}"
-        FRISIAN_MCP_LOCAL_WHEEL: "${FRISIAN_MCP_LOCAL_WHEEL:-}"
-        PIP_INDEX_URL: "${PIP_INDEX_URL:-}"
-        PIP_EXTRA_INDEX_URL: "${PIP_EXTRA_INDEX_URL:-}"
-    image: "ghcr.io/frisian-mcp/demo-nautobot:${DEMO_TAG:-v0.1.0}"
