@@ -1,0 +1,61 @@
+# Local-build override for the NetBox demo host.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
+#
+# The default path (`docker compose up`, no flags) pulls prebuilt images from
+# GHCR. This is the escape hatch for building both images yourself.
+#
+# It overrides ONLY the build inputs. Ports, volumes, environment, healthchecks
+# and the dependency graph all still come from docker-compose.yml.
+#
+# The `image:` keys are restated so a local build tags the names the default
+# path expects, keeping the lockstep pin intact: a local build replaces BOTH
+# images at the same DEMO_TAG, never one of the two.
+#
+# NOTE: the db image needs db/demo.sql.gz, which is NOT committed. `./seed/seed.sh`
+# produces it. Building the db image without it fails loudly rather than
+# producing an empty demo.
+#
+# The three application services share one image, so build args are repeated
+# across all three — compose does not forward the environment into a build, and
+# a missing arg makes the Dockerfile's one-lane guard fail no matter what the
+# user exported. All default EMPTY so the guard keeps failing closed.
+
+x-build: &build
+  context: .
+  dockerfile: Dockerfile
+  args:
+    FRISIAN_MCP_SPEC: "${FRISIAN_MCP_SPEC:-}"
+    FRISIAN_MCP_LOCAL_WHEEL: "${FRISIAN_MCP_LOCAL_WHEEL:-}"
+    PIP_INDEX_URL: "${PIP_INDEX_URL:-}"
+    PIP_EXTRA_INDEX_URL: "${PIP_EXTRA_INDEX_URL:-}"
+    DEMO_TAG: "${DEMO_TAG:-v0.1.0}"
+
+
+# ⚠️ ONLY `netbox` CARRIES `build:`, AND THAT IS NOT A TIDY-UP.
+#
+# All three application services run the SAME image. Giving all three a build
+# section makes the bake builder try to produce the identical tag three times
+# concurrently, and it fails with:
+#
+#     image "...netbox-seed:local": already exists
+#
+# So one service builds it and the other two reference the tag.
+# `pull_policy: never` is what stops them trying to PULL a tag that only exists
+# locally — compose builds every build-service before starting anything, so the
+# image is present by the time they start.
+
+services:
+  netbox:
+    build: *build
+    image: "ghcr.io/frisian-mcp/demo-netbox:${DEMO_TAG:-v0.1.0}"
+  worker:
+    image: "ghcr.io/frisian-mcp/demo-netbox:${DEMO_TAG:-v0.1.0}"
+    pull_policy: never
+  db:
+    build:
+      context: .
+      dockerfile: db/Dockerfile
+      args:
+        DEMO_TAG: "${DEMO_TAG:-v0.1.0}"
+    image: "ghcr.io/frisian-mcp/demo-netbox-db:${DEMO_TAG:-v0.1.0}"

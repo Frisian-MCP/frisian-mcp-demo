@@ -31,8 +31,14 @@ Thumbs.db
 .vscode/
 
 # Local rehearsal wheels are a build input, never a repo artifact.
+#
+# Listed per host rather than as `**/wheels/*.whl` because that is how it was
+# started — but note that the per-host form means ADDING A HOST SILENTLY OPTS
+# IT OUT. The netbox wheel was staged for commit before anyone noticed. If a
+# fourth host appears, add its line here at the same time as its directory.
 nautobot/wheels/*.whl
 paperless/wheels/*.whl
+netbox/wheels/*.whl
 
 # The Paperless demo estate has TWO halves. `**/demo.sql.gz` above covers the
 # database; this covers the media tree the database points at. Both are build

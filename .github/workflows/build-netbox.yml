@@ -1,0 +1,658 @@
+# Build and publish the NetBox demo images.
+#
+#   resolve   derive one DEMO_TAG; both images take it
+#   seed      BUILD THE ESTATE IN THIS WORKFLOW, from committed generators
+#   verify    build both images amd64-only, run the real zero-flag path,
+#             independently assert the identity set and the estate
+#   publish   linux/amd64 + linux/arm64, pushed. Gated.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# WHY THIS WORKFLOW SEEDS AND build-nautobot.yml DOES NOT
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The Nautobot workflow is BAKE-ONLY and fetches an already-credential-reset
+# golden artifact produced outside this repository. That is a security
+# property: this repository is PUBLIC, Actions artifacts in public
+# repositories are publicly downloadable, and the Nautobot estate descends
+# from a live, internet-facing instance. Seeding it here would put a
+# credential-reset script in the position of being the only control between an
+# ordinary bug and working credentials on the open internet.
+#
+# The NetBox estate has no such ancestry. Every byte of it is generated from
+# fiction by netbox/seed/corpus.py and netbox/seed/build_estate.py, both
+# committed here. There is no inherited database, no inherited credential, and
+# nothing to reset — the artifact is safe by construction rather than safe by
+# scrubbing.
+#
+# So this host seeds in the open, and gets a property the Nautobot host does
+# not have: the entire demo is reproducible from a clone, with no artifact
+# hosted anywhere else and no repository variable pointing at one.
+#
+# Do NOT "align" the two by moving this seed out of the repo, and do not copy
+# this seed stage into the Nautobot workflow. The asymmetry follows from a real
+# difference between the two estates.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: build-netbox
+
+on:
+  workflow_dispatch:
+    inputs:
+      demo_tag:
+        description: "Tag applied to BOTH images (app and db). Lockstep — never set these separately."
+        required: true
+        type: string
+      frisian_mcp_spec:
+        description: "PyPI requirement specifier, e.g. frisian-mcp[usage]==1.1.0. Required for the testpypi and release lanes."
+        required: false
+        default: ""
+        type: string
+      frisian_mcp_local_wheel:
+        description: "Wheel filename under netbox/wheels/. Required for the rehearsal lane. Note: wheels are gitignored, so CI has none."
+        required: false
+        default: ""
+        type: string
+      lane:
+        description: "Where frisian-mcp comes from. Dispatch never publishes on any lane -- this only selects what gets built and verified."
+        required: false
+        default: rehearsal
+        type: choice
+        options: [rehearsal, testpypi, release]
+
+  # PUBLISHING HAPPENS HERE, AND ONLY HERE.
+  #
+  # A merge to `main` that touches a path below. Nothing about the build comes
+  # from an operator: the tag is read from the merged tree's netbox/.env and
+  # the source from a repository variable, so what publishes is what a reviewer
+  # approved rather than what someone typed into a form afterwards.
+  #
+  # That is what makes branch protection an actual publish control. It governs
+  # MERGES, so any trigger that is not a merge walks around it — which is why
+  # `workflow_dispatch` has no `publish` input and there is no tag trigger.
+  push:
+    branches: [main]
+    paths:
+      - 'netbox/**'
+      - 'common/**'
+      - '.github/workflows/build-netbox.yml'
+
+concurrency:
+  # Serialised per tag: two runs publishing the same DEMO_TAG could push an app
+  # image from one run and a db image from another, which is exactly the mixed
+  # state the single-tag pin exists to prevent.
+  group: build-netbox-${{ github.event.inputs.demo_tag || github.ref }}
+  cancel-in-progress: false
+
+# Without this, every job inherits the repository default for GITHUB_TOKEN — a
+# setting that lives outside this file and may be read-write. `publish`
+# re-declares its own and is unaffected.
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  APP_IMAGE: ghcr.io/frisian-mcp/demo-netbox
+  DB_IMAGE: ghcr.io/frisian-mcp/demo-netbox-db
+
+  # There is NO default frisian-mcp spec here, and there must never be one. The
+  # Dockerfile was made to fail closed without an explicit pin; a default in
+  # this file would be the last remaining path to silently publishing an image
+  # built on a version that lacks the hardening.
+
+  # The publish floor. A release BELOW this cannot contain the per-route
+  # permission model or H3 + H9, and the demo's whole posture depends on them.
+  #
+  # A version number is STILL not evidence of content. This is a coarse filter
+  # in front of the real guarantee, which is the build-time assertion in
+  # netbox/Dockerfile that the hardening symbols and FRISIAN_MCP_ROUTES are
+  # present in the installed package. Do not remove that on the assumption this
+  # floor covers it. It does not; they are two different checks.
+  FRISIAN_MCP_MIN_VERSION: "1.1.0"
+
+jobs:
+
+  # ─────────────────────────────────────────────────────────────────────────
+  resolve:
+    name: Resolve the lockstep tag
+    runs-on: ubuntu-latest
+    outputs:
+      demo_tag: ${{ steps.tag.outputs.demo_tag }}
+      publish: ${{ steps.tag.outputs.publish }}
+      spec: ${{ steps.tag.outputs.spec }}
+      local_wheel: ${{ steps.tag.outputs.local_wheel }}
+      lane: ${{ steps.tag.outputs.lane }}
+      pip_index_url: ${{ steps.tag.outputs.pip_index_url }}
+      pip_extra_index_url: ${{ steps.tag.outputs.pip_extra_index_url }}
+    # `packages: read` is for the overwrite guard below, which asks the
+    # registry what is already published. Read-only: nothing in this job can
+    # push.
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VAR_SPEC: ${{ vars.FRISIAN_MCP_SPEC }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # A merge to main. Every value is derived from the tree that was
+            # merged -- there are no inputs on this trigger, and that is the
+            # design rather than a limitation.
+            #
+            # netbox/.env is the right source because it is TRACKED and is
+            # what a fresh clone's zero-flag `docker compose up` resolves.
+            # publish.sh already rewrites it at publish time, so the tag CI
+            # publishes and the tag a clone pulls cannot drift apart.
+            tag="$(sed -n 's/^DEMO_TAG=//p' netbox/.env | head -1)"
+            [ -n "$tag" ] || {
+              echo "::error::No DEMO_TAG in netbox/.env, so there is no tag to publish under."
+              exit 1; }
+            lane=release
+            wheel=""
+            spec="${VAR_SPEC:-}"
+            if [ -z "$spec" ]; then
+              # NOT a failure, deliberately. Wheels are gitignored, so CI has
+              # none and cannot run the rehearsal lane at all; the release lane
+              # is all it has, and that needs a published frisian-mcp. Until
+              # the FRISIAN_MCP_SPEC repository variable is set, a merge builds
+              # and verifies and publishes nothing.
+              #
+              # Failing instead would put a red X on every merge to main, and a
+              # check that always fails is a check everyone learns to ignore --
+              # including on the merge where it means something.
+              publish=false
+              echo "::notice::FRISIAN_MCP_SPEC is unset. Building and verifying only; nothing will be published."
+            else
+              publish=true
+            fi
+          else
+            # Dispatch builds and verifies. It CANNOT publish.
+            #
+            # Branch protection governs merges, so a dispatch publish would
+            # walk straight around the review gate: anyone who can trigger a
+            # workflow could push to GHCR without a PR.
+            tag="${{ github.event.inputs.demo_tag }}"
+            publish=false
+            lane="${{ github.event.inputs.lane }}"
+            lane="${lane:-rehearsal}"
+            spec="${{ github.event.inputs.frisian_mcp_spec }}"
+            wheel="${{ github.event.inputs.frisian_mcp_local_wheel }}"
+          fi
+          case "$lane" in
+            rehearsal|testpypi|release) ;;
+            *) echo "::error::Unknown lane '$lane'."; exit 1 ;;
+          esac
+          [ -n "$tag" ] || { echo "::error::No demo tag resolved."; exit 1; }
+
+          # Mirrors the Dockerfile's own guard rather than duplicating half of
+          # it. There is no fallback value in either place: a build with no
+          # source must stop rather than quietly resolving to some version
+          # nobody chose, and a build with TWO sources must stop rather than
+          # silently picking a lane.
+          if [ -n "$spec" ] && [ -n "$wheel" ]; then
+            echo "::error::Both frisian_mcp_spec and frisian_mcp_local_wheel are set. Pick one lane."
+            exit 1
+          fi
+          if [ -z "$spec" ] && [ -z "$wheel" ]; then
+            echo "::error::No frisian-mcp source selected, and there is no default."
+            echo "  testpypi/release lane: frisian_mcp_spec"
+            echo "  rehearsal lane:        frisian_mcp_local_wheel"
+            exit 1
+          fi
+
+          # The lane and the source have to agree. A wheel on the release lane
+          # is the case that matters: it would publish an image built from a
+          # file nobody else can reproduce.
+          case "$lane" in
+            rehearsal)
+              [ -n "$wheel" ] || { echo "::error::lane=rehearsal needs frisian_mcp_local_wheel, not a PyPI spec."; exit 1; } ;;
+            testpypi|release)
+              [ -n "$spec" ] || { echo "::error::lane=$lane needs frisian_mcp_spec, not a local wheel."; exit 1; } ;;
+          esac
+
+          # ── Overwrite guard ───────────────────────────────────────────────
+          #
+          # A published tag is never overwritten. Retention and rollback both
+          # depend on an old demo tag still meaning what it meant when someone
+          # wrote it down.
+          #
+          # A merge cannot know whether DEMO_TAG was bumped, and inferring it
+          # from the diff would be wrong in both directions. So ASK THE
+          # REGISTRY what already exists.
+          #
+          # Both packages are checked, not just the app: they publish as a
+          # lockstep pair, and one half already carrying the tag is exactly the
+          # mixed state that pairing exists to prevent.
+          if [ "$publish" = "true" ]; then
+            for pkg in demo-netbox demo-netbox-db; do
+              if ! existing="$(gh api --paginate \
+                    "/orgs/Frisian-MCP/packages/container/${pkg}/versions" \
+                    --jq '.[].metadata.container.tags[]' 2>/dev/null)"; then
+                # A first publish has no package yet, and the API 404s. That is
+                # not the same as "the guard could not run" — but this workflow
+                # cannot tell the two apart from an exit code alone, so it
+                # refuses. Create the package with a dispatch build first, or
+                # grant package read access under Manage Actions access.
+                echo "::error::Could not list published tags for ${pkg}."
+                echo "Refusing to publish. A guard that could not run is not a guard"
+                echo "that passed -- and this one is the only thing standing between a"
+                echo "merge and an overwritten release tag."
+                exit 1
+              fi
+              if printf '%s\n' "$existing" | grep -qxF "$tag"; then
+                echo "::error::${pkg}:${tag} is already published, and published tags are immutable."
+                echo "Bump DEMO_TAG in netbox/.env and merge again. Do not delete the"
+                echo "existing tag to make room -- someone may have it written down."
+                exit 1
+              fi
+            done
+            echo "Overwrite guard: neither package carries '$tag' yet."
+          fi
+
+          echo "demo_tag=$tag"          >> "$GITHUB_OUTPUT"
+          echo "publish=$publish"       >> "$GITHUB_OUTPUT"
+          echo "spec=$spec"             >> "$GITHUB_OUTPUT"
+          echo "local_wheel=$wheel"     >> "$GITHUB_OUTPUT"
+          echo "lane=$lane"             >> "$GITHUB_OUTPUT"
+
+          # The index is a SEPARATE axis from the requirement specifier, on
+          # purpose. Test PyPI needs --index-url plus real PyPI as an extra
+          # index, but folding those flags into FRISIAN_MCP_SPEC would mean
+          # widening the publish gate to admit index flags — and that gate
+          # rejecting them is the thing keeping an arbitrary index out of a
+          # published image.
+          case "$lane" in
+            testpypi)
+              echo "pip_index_url=https://test.pypi.org/simple/" >> "$GITHUB_OUTPUT"
+              echo "pip_extra_index_url=https://pypi.org/simple/" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "pip_index_url=" >> "$GITHUB_OUTPUT"
+              echo "pip_extra_index_url=" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+          echo "Both images will be tagged: $tag"
+          echo "lane: $lane   frisian-mcp: ${spec:-$wheel}"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  seed:
+    name: Build the estate
+    runs-on: ubuntu-latest
+    needs: resolve
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard — the rehearsal lane needs a wheel that CI does not have
+        if: needs.resolve.outputs.lane == 'rehearsal'
+        env:
+          WHEEL: ${{ needs.resolve.outputs.local_wheel }}
+        run: |
+          set -euo pipefail
+          # netbox/wheels/*.whl is gitignored, deliberately — a rehearsal
+          # wheel is a build input, never a repo artifact. So a fresh checkout
+          # has none, and the rehearsal lane is a LOCAL lane by construction.
+          #
+          # Saying so here beats a confusing COPY failure four steps later.
+          if [ ! -f "netbox/wheels/${WHEEL}" ]; then
+            echo "::error::netbox/wheels/${WHEEL} is not in this checkout."
+            echo "Rehearsal wheels are gitignored, so this lane cannot run in CI."
+            echo "Build it locally, or use the testpypi/release lane here."
+            exit 1
+          fi
+
+      - name: Seed
+        working-directory: netbox
+        env:
+          FRISIAN_MCP_SPEC: ${{ needs.resolve.outputs.spec }}
+          FRISIAN_MCP_LOCAL_WHEEL: ${{ needs.resolve.outputs.local_wheel }}
+          PIP_INDEX_URL: ${{ needs.resolve.outputs.pip_index_url }}
+          PIP_EXTRA_INDEX_URL: ${{ needs.resolve.outputs.pip_extra_index_url }}
+        run: ./seed/seed.sh
+
+      # ONE artifact, one half. Unlike the Paperless host — whose estate is
+      # split between a SQL dump and a media tarball that must travel together
+      # — every NetBox demo object is a row. There is no second half to keep in
+      # step, so there is no lockstep hazard here to guard against.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: demo-estate-${{ needs.resolve.outputs.demo_tag }}
+          path: netbox/db/demo.sql.gz
+          retention-days: 7
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────────
+  verify:
+    name: Verify (amd64, not published)
+    runs-on: ubuntu-latest
+    needs: [resolve, seed]
+    steps:
+      - uses: actions/checkout@v4
+
+      # The artifact preserves the path it was uploaded under, so this lands
+      # the dump back where db/Dockerfile expects it.
+      - uses: actions/download-artifact@v4
+        with:
+          name: demo-estate-${{ needs.resolve.outputs.demo_tag }}
+          path: .
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Guard — the Test PyPI lane must actually be wired
+        if: needs.resolve.outputs.lane == 'testpypi'
+        run: |
+          set -euo pipefail
+          # Docker IGNORES a build-arg the Dockerfile does not declare, and only
+          # warns. Without this check, a Test PyPI build would silently install
+          # from real PyPI and report success — a pre-release lane that
+          # validated the wrong artifact, which is worse than not having one.
+          for a in PIP_INDEX_URL PIP_EXTRA_INDEX_URL; do
+            grep -qE "^ARG[[:space:]]+$a" netbox/Dockerfile || {
+              echo "::error::netbox/Dockerfile does not declare 'ARG $a'."
+              echo "The build-arg would be ignored and this lane would quietly build"
+              echo "from real PyPI while claiming to validate the Test PyPI artifact."
+              exit 1
+            }
+          done
+
+      - name: Guard — the plugin wrapper must mount PER-ROUTE views
+        run: |
+          set -euo pipefail
+          # NetBox is the only host where frisian-mcp does not mount its own
+          # URLs: it routes third-party URLs through PluginConfig, so this
+          # wrapper is the only thing that mounts anything.
+          #
+          # Two ways it goes wrong, and the second is the dangerous one:
+          #
+          #   too old      — reads only FRISIAN_MCP_PATH, mounts a single door,
+          #                  the three configured routes 404. Loud.
+          #   subtly wrong — mounts include('frisian_mcp.urls') once per path.
+          #                  That is the LEGACY gateway view, which serves the
+          #                  full unfiltered registry. Three doors answer, all
+          #                  three look correct, and no tier ceiling applies.
+          #                  Measured: the admin token was offered create,
+          #                  destroy and the bulk_* actions on the READ-ONLY
+          #                  door. Silent.
+          #
+          # This grep catches both before the build. It is a cheap guard, not a
+          # proof — acceptance-netbox.sh section 5 is the proof, and it runs
+          # below. Keep both: this one fails in seconds with a clear reason,
+          # that one fails against a running stack.
+          if ! grep -q '_install_route_urls' netbox/plugin/frisian_mcp_netbox/__init__.py; then
+            echo "::error::netbox/plugin/frisian_mcp_netbox/__init__.py does not call _install_route_urls()."
+            echo "It either predates FRISIAN_MCP_ROUTES support or mounts the routes itself."
+            echo "Mounting the legacy gateway view per path yields three doors with no tier ceiling."
+            exit 1
+          fi
+          echo "wrapper mounts per-route views (_install_route_urls)"
+
+      - name: Build both images, amd64 only, loaded locally
+        env:
+          DEMO_TAG: ${{ needs.resolve.outputs.demo_tag }}
+          SPEC: ${{ needs.resolve.outputs.spec }}
+          WHEEL: ${{ needs.resolve.outputs.local_wheel }}
+          IDX: ${{ needs.resolve.outputs.pip_index_url }}
+          XIDX: ${{ needs.resolve.outputs.pip_extra_index_url }}
+        run: |
+          set -euo pipefail
+          # Both lane args are passed and exactly one is non-empty; the
+          # Dockerfile refuses if that stops being true.
+          docker buildx build --load --platform linux/amd64 \
+            --build-arg "FRISIAN_MCP_SPEC=${SPEC}" \
+            --build-arg "FRISIAN_MCP_LOCAL_WHEEL=${WHEEL}" \
+            --build-arg "PIP_INDEX_URL=${IDX}" \
+            --build-arg "PIP_EXTRA_INDEX_URL=${XIDX}" \
+            --build-arg "DEMO_TAG=${DEMO_TAG}" \
+            -t "${APP_IMAGE}:${DEMO_TAG}" -f netbox/Dockerfile netbox/
+          docker buildx build --load --platform linux/amd64 \
+            --build-arg "DEMO_TAG=${DEMO_TAG}" \
+            -t "${DB_IMAGE}:${DEMO_TAG}" -f netbox/db/Dockerfile netbox/
+
+      - name: Acceptance — the zero-flag path, exactly as a user runs it
+        working-directory: netbox
+        run: |
+          set -euo pipefail
+          # No -f chain and no profile. If this needs one to pass, the demo is
+          # broken for every user regardless of whether CI is green.
+          #
+          # `-d` WITHOUT `--wait`, and that is not a shortcut. The netbox
+          # container restarts itself once during first boot while it waits for
+          # the database to accept connections; `--wait` reads that restart as a
+          # failed start and aborts a stack that is coming up normally. So the
+          # readiness condition is polled explicitly instead.
+          docker compose up -d
+          deadline=$(( SECONDS + 900 ))
+          until docker compose ps --format '{{.Service}} {{.Status}}' \
+                | grep -qE '^netbox .*healthy'; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::netbox did not become healthy within 900s"
+              docker compose ps || true
+              docker compose logs --no-color --tail 200 || true
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "netbox healthy after ${SECONDS}s"
+
+      - name: Independently assert the identity set and the estate
+        working-directory: netbox
+        run: |
+          set -euo pipefail
+          if [ ! -f db/assert-identities.sh ]; then
+            echo "::error::netbox/db/assert-identities.sh missing."
+            echo "Refusing to publish images whose credential state is unverified."
+            exit 1
+          fi
+          # Run it inside the db container: that is where psql, bash 5 and the
+          # connection details all already are.
+          docker compose cp db/assert-identities.sh db:/tmp/assert-identities.sh
+          docker compose exec -T db bash /tmp/assert-identities.sh
+
+      - name: Acceptance — the three doors
+        working-directory: netbox
+        run: |
+          set -euo pipefail
+          if [ ! -x ../common/ci/acceptance-netbox.sh ]; then
+            echo "::error::common/ci/acceptance-netbox.sh missing. Refusing to publish unverified images."
+            exit 1
+          fi
+          ../common/ci/acceptance-netbox.sh
+
+      - name: Diagnostics on failure
+        if: failure()
+        working-directory: netbox
+        run: |
+          docker compose ps || true
+          docker compose logs --no-color --tail 200 || true
+
+      - name: Tear down
+        if: always()
+        working-directory: netbox
+        run: docker compose down -v || true
+
+  # ─────────────────────────────────────────────────────────────────────────
+  publish:
+    name: Publish (multi-arch)
+    runs-on: ubuntu-latest
+    needs: [resolve, seed, verify]
+    if: needs.resolve.outputs.publish == 'true'
+
+    # ⚠️ THIS LINE IS NOT A GATE BY ITSELF.
+    #
+    # Naming an environment that does not exist AUTO-CREATES it, with no
+    # protection rules, and the job then runs straight through. So the presence
+    # of this line proves nothing about whether anyone has to approve a publish
+    # — it only creates the place where that rule can live.
+    #
+    # It becomes a control when `ghcr-publish` has REQUIRED REVIEWERS set at
+    # Settings -> Environments. Until someone does that, this is a label.
+    #
+    # A workflow cannot check this for itself — GITHUB_TOKEN has no permission
+    # that can read environment protection rules — which is exactly why it is
+    # written down instead of asserted.
+    environment: ghcr-publish
+
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: GATE — what may be published, and under what tag
+        env:
+          SPEC: ${{ needs.resolve.outputs.spec }}
+          WHEEL: ${{ needs.resolve.outputs.local_wheel }}
+          LANE: ${{ needs.resolve.outputs.lane }}
+          TAG: ${{ needs.resolve.outputs.demo_tag }}
+          IDX: ${{ needs.resolve.outputs.pip_index_url }}
+          XIDX: ${{ needs.resolve.outputs.pip_extra_index_url }}
+        run: |
+          set -euo pipefail
+          case "$LANE" in
+            testpypi)
+              # NOT a discipline call. Test PyPI is explicitly non-durable:
+              # files can be deleted and it prunes. An image published from it
+              # breaks silently later under someone else's `docker pull`, when
+              # the index it was built from no longer has the artifact.
+              echo "::error::lane=testpypi cannot publish. The index is non-durable;"
+              echo "a published image would outlive the artifact it was built from."
+              exit 1
+              ;;
+
+            rehearsal)
+              # MAY publish, but only under a tag that says so. The local lane
+              # builds from a clean origin/main export with the wheel's sha256
+              # recorded, and the Dockerfile refuses any wheel lacking the
+              # hardening markers — so it is reproducible enough to publish,
+              # and the tag has to be honest about what it is.
+              [ -n "$WHEEL" ] || { echo "::error::rehearsal publish needs a local wheel."; exit 1; }
+              case "$TAG" in
+                *-pre|*-pre.*|*-rc|*-rc.*) ;;
+                *)
+                  echo "::error::lane=rehearsal must publish under a pre-release tag, got '$TAG'."
+                  echo "This image carries a locally built, pre-release frisian-mcp. A tag that"
+                  echo "does not say so invites someone to treat it as a release build."
+                  exit 1 ;;
+              esac
+              echo "Gate passed: rehearsal -> pre-release tag '$TAG', wheel '$WHEEL'"
+              ;;
+
+            release)
+              # A release tag makes a promise about the package, so it still
+              # has to be a real PyPI pin at or above the hardening floor.
+              [ -z "$WHEEL" ] || { echo "::error::a local wheel cannot back a release tag."; exit 1; }
+              if [ -n "${IDX:-}" ] || [ -n "${XIDX:-}" ]; then
+                echo "::error::a pip index override is set on the release lane."
+                exit 1
+              fi
+              case "$TAG" in
+                *-pre|*-pre.*|*-rc|*-rc.*)
+                  echo "::error::lane=release must not publish under a pre-release tag, got '$TAG'."
+                  exit 1 ;;
+              esac
+              if ! printf '%s' "$SPEC" | grep -qE '^frisian-mcp(\[[a-z0-9,._-]+\])?==[0-9]+\.[0-9]+\.[0-9]+$'; then
+                echo "::error::FRISIAN_MCP_SPEC is not a PyPI version pin: '$SPEC'"
+                exit 1
+              fi
+              version="${SPEC##*==}"
+              lowest=$(printf '%s\n%s\n' "$version" "$FRISIAN_MCP_MIN_VERSION" | sort -V | head -1)
+              if [ "$version" != "$FRISIAN_MCP_MIN_VERSION" ] && [ "$lowest" = "$version" ]; then
+                echo "::error::frisian-mcp $version is below the publish floor $FRISIAN_MCP_MIN_VERSION."
+                echo "Raise the floor deliberately if a qualifying release now exists;"
+                echo "do not lower it to make a run pass."
+                exit 1
+              fi
+              echo "Gate passed: release -> $SPEC (floor $FRISIAN_MCP_MIN_VERSION), tag '$TAG'"
+              ;;
+          esac
+
+          # NONE of the above proves CONTENT, on any lane. A version string is
+          # not evidence. The real guarantee is the build-time assertion in
+          # netbox/Dockerfile. It runs on every lane and it is the reason the
+          # rehearsal lane can be trusted to publish at all.
+          echo "Content is guaranteed by the Dockerfile assertion, not by this gate."
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: demo-estate-${{ needs.resolve.outputs.demo_tag }}
+          path: .
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Both pushes are in one job on purpose. Split across jobs, a failure
+      # between them leaves one image published at a tag the other never
+      # reaches — the mixed state the lockstep pin exists to prevent. On this
+      # host that matters twice over: the two images carry the two halves of
+      # one estate.
+      - name: Push the db image (multi-arch)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./netbox
+          file: ./netbox/db/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.DB_IMAGE }}:${{ needs.resolve.outputs.demo_tag }}
+          build-args: |
+            DEMO_TAG=${{ needs.resolve.outputs.demo_tag }}
+          provenance: true
+          sbom: true
+
+      - name: Push the app image (multi-arch)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./netbox
+          file: ./netbox/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.APP_IMAGE }}:${{ needs.resolve.outputs.demo_tag }}
+          build-args: |
+            FRISIAN_MCP_SPEC=${{ needs.resolve.outputs.spec }}
+            DEMO_TAG=${{ needs.resolve.outputs.demo_tag }}
+            PIP_INDEX_URL=
+            PIP_EXTRA_INDEX_URL=
+          provenance: true
+          sbom: true
+
+      - name: Confirm both images resolve on both arches at the same tag
+        run: |
+          set -euo pipefail
+          # Verifies the guarantee rather than assuming the pushes implied it.
+          for img in "${APP_IMAGE}" "${DB_IMAGE}"; do
+            echo "--- $img:${{ needs.resolve.outputs.demo_tag }}"
+            docker buildx imagetools inspect "$img:${{ needs.resolve.outputs.demo_tag }}" | tee /tmp/manifest.txt
+            for arch in amd64 arm64; do
+              grep -q "linux/$arch" /tmp/manifest.txt \
+                || { echo "::error::$img is missing linux/$arch"; exit 1; }
+            done
+          done
+
+      - name: Summary
+        run: |
+          {
+            echo "### Published"
+            echo ""
+            echo '```'
+            echo "${APP_IMAGE}:${{ needs.resolve.outputs.demo_tag }}"
+            echo "${DB_IMAGE}:${{ needs.resolve.outputs.demo_tag }}"
+            echo "frisian-mcp: ${{ needs.resolve.outputs.spec }}"
+            echo '```'
+            echo ""
+            echo "Both images carry the same tag, and on this host they carry the two"
+            echo "halves of one estate. Do not pull them at different tags."
+            echo ""
+            echo "GHCR package visibility is NOT inherited from repository visibility."
+            echo "See common/docs/PUBLISHING.md."
+          } >> "$GITHUB_STEP_SUMMARY"
