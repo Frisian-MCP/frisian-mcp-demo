@@ -1,0 +1,152 @@
+---
+# frisian-mcp demo — NetBox
+#
+# netbox-docker's own shape — netbox, a worker, housekeeping, postgres, redis —
+# with exactly two differences:
+#
+#   1. the images carry frisian-mcp, the plugin wrapper and the demo estate
+#   2. config/frisian_mcp.py is mounted over netbox-docker's extra.py
+#
+# Point 2 is the demo. The file is in the clone: read it, change it,
+# `docker compose restart`, and watch the routes and scopes change.
+#
+#   docker compose up          pull and run
+#   docker compose restart     re-read the config, reset the estate
+#
+# THERE IS NO `env_file:` HERE, DELIBERATELY. Every value is declared inline
+# with a ${VAR:-default}. Compose still reads the committed .env for
+# interpolation, so .env overrides everything — but the stack also boots
+# correctly WITHOUT .env. Two independent layers; `env_file:` is
+# mandatory-if-declared, so a missing file would abort the whole stack.
+
+name: frisian-mcp-demo-netbox
+
+x-netbox: &netbox
+  image: "ghcr.io/frisian-mcp/demo-netbox:${DEMO_TAG:-v0.1.0}"
+  restart: unless-stopped
+  environment:
+    # ─── Database ──────────────────────────────────────────────────────────
+    DB_HOST: "db"
+    DB_NAME: "${POSTGRES_DB:-netbox}"
+    DB_USER: "${POSTGRES_USER:-netbox}"
+    DB_PASSWORD: "${POSTGRES_PASSWORD:-netbox}"
+
+    # ─── Redis ─────────────────────────────────────────────────────────────
+    # netbox-docker normally runs TWO redis instances. One instance with two
+    # logical databases is the same isolation for a demo, and one less
+    # container to explain.
+    REDIS_HOST: "redis"
+    REDIS_DATABASE: "0"
+    REDIS_CACHE_HOST: "redis"
+    REDIS_CACHE_DATABASE: "1"
+
+    # ─── NetBox ────────────────────────────────────────────────────────────
+    # A second gate behind the loopback bind: reaching the demo under any
+    # other hostname fails at the Django layer even if DEMO_BIND_HOST is
+    # widened. Space-separated — that is how this image parses it.
+    #
+    # NOTE the image APPENDS "localhost" when neither "*" nor "localhost" is
+    # present, for its own healthcheck. So this list is a real restriction
+    # even though localhost is always reachable.
+    ALLOWED_HOSTS: "${NETBOX_ALLOWED_HOSTS:-127.0.0.1 localhost [::1]}"
+    # SECRET_KEY is NOT set here. netbox-docker requires one and does not
+    # generate it; config/frisian_mcp.py generates and persists it to the
+    # demo_state volume instead, because publishing a fixed key in a public
+    # repo publishes a session-forgery key for every copy of this demo.
+    SKIP_SUPERUSER: "true"
+
+    # ─── frisian-mcp ───────────────────────────────────────────────────────
+    # Changing this breaks every token baked into the demo database.
+    FRISIAN_MCP_HMAC_KEY: "${FRISIAN_MCP_HMAC_KEY:-frisian-mcp-demo-public-hmac-key-do-not-reuse}"
+    # Must be the origin a client actually connects to — it is echoed verbatim
+    # as `resource` in the RFC 9728 metadata and compared as a string.
+    FRISIAN_MCP_OAUTH_ISSUER: "http://${DEMO_BIND_HOST:-127.0.0.1}:${DEMO_HTTP_PORT:-8083}"
+  volumes:
+    # THE DEMO. netbox-docker's documented extension point for settings that
+    # cannot come from environment variables.
+    - ./config/frisian_mcp.py:/etc/netbox/config/extra.py:ro
+    - demo_state:/opt/netbox/demo-state
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+
+  netbox:
+    <<: *netbox
+    ports:
+      # Loopback by default. 0.0.0.0 publishes a stack whose credentials are
+      # printed in the README.
+      #
+      # 8083: 8080 is the Nautobot demo, 8081 Paperless, 8082 Open edX. All
+      # four are meant to be runnable at once.
+      - "${DEMO_BIND_HOST:-127.0.0.1}:${DEMO_HTTP_PORT:-8083}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--max-time", "5", "http://localhost:8080/login/"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 180s
+
+  # The background worker. NetBox enqueues jobs for a few API actions, so it is
+  # here even though the demo denies the script surface entirely.
+  #
+  # NO HEALTHCHECK, deliberately. The obvious one — `ps -C python` — passes
+  # whenever any python process exists, which is not the same as "the worker is
+  # consuming its queue", and `docker compose up --wait` blocks on every
+  # healthcheck that is declared. A check that cannot fail usefully is worse
+  # than none: it turns a green stack into evidence of nothing.
+  #
+  # THERE IS NO `housekeeping` SERVICE. netbox-docker's compose has one, and it
+  # runs /opt/netbox/housekeeping.sh — which does NOT EXIST in this image
+  # (v4.6.2 ships only docker-entrypoint.sh and launch-netbox.sh). Copying that
+  # service across produced a container that failed its healthcheck forever and
+  # blocked the whole stack. It is also pointless here: housekeeping expires
+  # sessions and trims the changelog, and this demo resets its database on every
+  # start.
+  worker:
+    <<: *netbox
+    command: ["/opt/netbox/venv/bin/python", "/opt/netbox/netbox/manage.py", "rqworker"]
+
+  redis:
+    image: "docker.io/library/redis:7-alpine"
+    restart: unless-stopped
+    # No persistence. Everything here is a queue or a cache, both rebuilt from
+    # the database on start — and an appendonly file would be one more piece of
+    # state surviving a restart that this stack is arranged not to have.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  db:
+    image: "ghcr.io/frisian-mcp/demo-netbox-db:${DEMO_TAG:-v0.1.0}"
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-netbox}"
+      POSTGRES_USER: "${POSTGRES_USER:-netbox}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-netbox}"
+    # PGDATA is a tmpfs, and that is what makes the demo reproducible: the
+    # estate is restored on EVERY start, including `docker compose restart`.
+    #
+    # Do not replace this with a volume, and do not remove it because "no
+    # volume is declared anyway". The postgres image declares VOLUME in its own
+    # Dockerfile, so Docker creates an ANONYMOUS one — which Compose then
+    # preserves across recreation, including an `up` onto a changed image.
+    # Measured on the Nautobot host: that path skips initdb and comes up green
+    # against a stale database, which the application then migrates in place.
+    tmpfs:
+      - /var/lib/postgresql/data:size=1g
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 120s
+
+volumes:
+  demo_state:

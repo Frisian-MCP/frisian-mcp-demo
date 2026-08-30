@@ -5,17 +5,28 @@ demos.
 
 ## Which host
 
-Two demo hosts ship in this repository, on different ports so both can run at
-once. Everything from "The demo identities" down to "Paths" describes the
-**Nautobot** host; the **Paperless** host has its own section at the bottom.
+Three demo hosts ship in this repository, on different ports so all of them can
+run at once. Everything from "The demo identities" down to "Paths" describes the
+**Nautobot** host; the **Paperless** and **NetBox** hosts have their own sections
+at the bottom.
 
 | host | start it with | base URL | client template |
 |---|---|---|---|
 | Nautobot | `cd nautobot && docker compose up` | `http://127.0.0.1:8080` | [`nautobot.mcp.json.template`](nautobot.mcp.json.template) |
 | Paperless-ngx | `cd paperless && docker compose up` | `http://127.0.0.1:8081` | [`paperless.mcp.json.template`](paperless.mcp.json.template) |
+| NetBox | `cd netbox && docker compose up -d` | `http://127.0.0.1:8083` | [`netbox.mcp.json.template`](netbox.mcp.json.template) |
+
+**One difference worth knowing before you connect.** On Nautobot and Paperless
+the three client entries share a mount point and differ only by token. On
+NetBox they have three different URLs, because that host configures
+`FRISIAN_MCP_ROUTES` — a tier ceiling per path. There, the door caps what any
+caller can reach and the identity narrows it further, so the admin token on the
+read-only URL is offered `list` and `retrieve` and nothing else. If you want to
+see a route ceiling rather than read about one, that is the host to point a
+client at.
 
 The `curl-*.sh` scripts default to the Nautobot host. Set `BASE_URL` to reach
-the other one:
+another one:
 
 ```bash
 BASE_URL="http://127.0.0.1:8081" TOKEN=... ROUTE=mcp/read-only ./curl-tools-list.sh

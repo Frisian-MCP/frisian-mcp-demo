@@ -1,0 +1,51 @@
+{
+  "//": [
+    "frisian-mcp demo — NetBox host.",
+    "",
+    "Merge the mcpServers block below into your MCP client's configuration.",
+    "The tokens are real and work exactly as printed: they are fixed, published",
+    "demo constants baked into the demo images, not placeholders to substitute.",
+    "",
+    "Three entries, because the demo IS the difference between them. Connect all",
+    "three and compare what each one lists.",
+    "",
+    "THIS HOST IS THE ONE WITH THREE SEPARATE DOORS. On Nautobot and Paperless",
+    "the three entries differ only by the TOKEN — one mount point, three",
+    "identities. Here the URLs differ too: FRISIAN_MCP_ROUTES puts a tier",
+    "ceiling on each path, so the door limits what ANY caller can reach and the",
+    "identity narrows it further. Point the admin token at the read-only URL and",
+    "it gets list and retrieve, nothing else. That combination is the thing this",
+    "host exists to show, and it is worth trying on purpose.",
+    "",
+    "The port is 8083. Nautobot uses 8080, Paperless 8081, Open edX 8082, so all",
+    "of them can run at once.",
+    "",
+    "THE ADMIN DOOR IS /api/mcp/ops, NOT /api/mcp/admin. MCP clients strip an",
+    "`admin` suffix and retry the bare URL, which lands the caller on a",
+    "different route with a different tier ceiling — silently. Do not tidy the",
+    "path."
+  ],
+  "mcpServers": {
+    "netbox-read-only": {
+      "type": "http",
+      "url": "http://127.0.0.1:8083/api/mcp/read-only",
+      "headers": {
+        "Authorization": "Bearer frisian-demo-readonly-token-public-do-not-reuse"
+      }
+    },
+    "netbox-read-write": {
+      "type": "http",
+      "url": "http://127.0.0.1:8083/api/mcp/read-write",
+      "headers": {
+        "Authorization": "Bearer frisian-demo-netops-token-public-do-not-reuse"
+      }
+    },
+    "netbox-ops": {
+      "type": "http",
+      "url": "http://127.0.0.1:8083/api/mcp/ops",
+      "headers": {
+        "Authorization": "Bearer frisian-demo-admin-token-public-do-not-reuse"
+      }
+    }
+  }
+}

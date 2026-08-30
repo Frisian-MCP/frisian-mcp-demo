@@ -1,0 +1,35 @@
+# The NetBox plugin wrapper, packaged so the image can install it.
+#
+# WHY THIS IS VENDORED AND NOT MOUNTED
+#
+# NetBox does not route third-party URLs through Django's resolver. It loads
+# them from a `PluginConfig` listed in `PLUGINS`, which is read at startup from
+# INSTALLED_APPS — so the app has to be importable when Django boots, which
+# means installed in the image, not bind-mounted over it at run time like
+# `config/`.
+#
+# It is the same reasoning that keeps `config/` mounted: mount what a reader
+# should be able to change and restart, bake what has to exist before Django
+# starts.
+#
+# Ported from frisian-mcp's own reference wrapper at
+# docs/installs/Django/netbox/4.x/development/plugin_wrapper/. That copy is the
+# one users follow; this one exists because a demo host must ship a working
+# image. If the two drift, the docs copy is the source of truth.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "frisian-mcp-netbox"
+version = "0.1.0"
+description = "Mounts frisian-mcp's MCP, OAuth and well-known URLs inside NetBox's plugin system"
+requires-python = ">=3.10"
+
+# frisian-mcp is deliberately NOT a dependency. The image installs it
+# separately, and pinning it here would give two places that decide the
+# version. This package only knows how to WIRE it up.
+dependencies = []
+
+[tool.setuptools.packages.find]
+include = ["frisian_mcp_netbox*"]

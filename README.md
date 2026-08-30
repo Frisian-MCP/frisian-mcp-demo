@@ -99,34 +99,49 @@ host README.
 |---|---|---|---|
 | Nautobot | [`nautobot/`](nautobot/) | 8080 | a network: sites, devices, interfaces, circuits, addressing |
 | Paperless-ngx | [`paperless/`](paperless/) | 8081 | a document archive: invoices, statements, contracts, reports |
+| NetBox | [`netbox/`](netbox/) | 8083 | a network: two datacentres, spine-and-leaf, circuits, addressing |
 
-Different ports, so both can run at once — which is the point of having two.
-The mechanism is identical and the domain is not, so watching the same route
-model carve a document archive and a network estate is what separates "this
-works for network data" from "this works".
+Different ports, so all of them can run at once — which is the point of having
+more than one. The mechanism is identical and the domain is not, so watching the
+same route model carve a document archive and a network estate is what
+separates "this works for network data" from "this works".
+
+**NetBox is the one to start with if what you want to see is per-route
+permissions.** The other two hosts give three identities a single mount point,
+so the only variable is who you are. NetBox configures `FRISIAN_MCP_ROUTES` and
+gives you three *doors* as well — which means you can send one credential at two
+URLs and watch it be offered a different tool surface on each. That separation
+between "the door caps this" and "your grant caps this" is hard to show with one
+mount point and immediate with three.
 
 Each host directory is self-contained, and the entry path is always the same:
 
 ```bash
 cd <host>
-docker compose up
+docker compose up            # netbox: use `up -d`, see its README
 ```
 
 Start with the host README —
-[`nautobot/README.md`](nautobot/README.md) or
-[`paperless/README.md`](paperless/README.md) — each carries the quickstart, the
+[`nautobot/README.md`](nautobot/README.md),
+[`paperless/README.md`](paperless/README.md) or
+[`netbox/README.md`](netbox/README.md) — each carries the quickstart, the
 identity roster, the first-boot expectations, and the full walkthrough. See
 [`common/docs/HOST-CONTRACT.md`](common/docs/HOST-CONTRACT.md) for what any
 host directory must provide.
 
 ### The identities are not interchangeable between hosts
 
-The `read` and `admin` tokens are deliberately the same strings on both hosts,
-because an identity that means the same thing on both surfaces should not need
-a different line in a client config. The scoped writer in the middle is
-host-specific by nature — `demo-netops` on Nautobot, `demo-editor` on
-Paperless — because what a narrow write grant should cover depends entirely on
-what the estate is.
+The `read` and `admin` tokens are deliberately the same strings on every host,
+because an identity that means the same thing on each surface should not need a
+different line in a client config. The scoped writer in the middle is
+host-specific by nature — `demo-netops` on Nautobot and NetBox, `demo-editor`
+on Paperless — because what a narrow write grant should cover depends entirely
+on what the estate is.
+
+The URLs are not interchangeable either, and only on NetBox does that matter:
+its three doors live at `/api/mcp/read-only`, `/api/mcp/read-write` and
+`/api/mcp/ops`, where the other hosts use one mount point for all three
+identities.
 
 ## Images
 
@@ -139,6 +154,9 @@ ghcr.io/frisian-mcp/demo-nautobot-db:v0.1.0
 
 ghcr.io/frisian-mcp/demo-paperless:v0.1.0
 ghcr.io/frisian-mcp/demo-paperless-db:v0.1.0
+
+ghcr.io/frisian-mcp/demo-netbox:v0.1.0
+ghcr.io/frisian-mcp/demo-netbox-db:v0.1.0
 ```
 
 **There is no `latest` tag**, and a pair must not be split. The database
