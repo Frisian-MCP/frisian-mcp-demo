@@ -473,13 +473,31 @@ else
     bad "demo-netops could not create its own bookmark: $(printf '%s' "$out" | head -c 160)"
   fi
 
+  # Asserted on the DATABASE, not on the status code.
+  #
+  # An earlier version of this check grepped for 403 and called anything else a
+  # cross-user write. On frisian-mcp 1.1.0 the refusal arrives as a 500 (see
+  # 8c), so it reported a successful cross-user write that had not happened —
+  # a false alarm on the most alarming wording in this file.
+  #
+  # The security question is "did a row land?". Answer that directly, then
+  # judge the status code separately.
+  before=$(dc exec -T db psql -qtAX -U "${POSTGRES_USER:-netbox}" -d "${POSTGRES_DB:-netbox}" \
+    -c "SELECT count(*) FROM extras_bookmark WHERE user_id=${uid_admin};" 2>/dev/null | tr -d '[:space:]')
   out=$(mcp "$TOK_NO" "$DOOR_RW" extras bookmark create \
         "{\"object_type\":\"dcim.site\",\"object_id\":2,\"user\":\"$uid_admin\"}")
-  if printf '%s' "$out" | grep -q '403'; then
-    ok "demo-netops may NOT bookmark for another user (403)"
+  after=$(dc exec -T db psql -qtAX -U "${POSTGRES_USER:-netbox}" -d "${POSTGRES_DB:-netbox}" \
+    -c "SELECT count(*) FROM extras_bookmark WHERE user_id=${uid_admin};" 2>/dev/null | tr -d '[:space:]')
+
+  if [ "${before:-0}" = "${after:-1}" ]; then
+    ok "demo-netops did NOT create a row owned by demo-admin (${after} before and after)"
   else
-    bad "CROSS-USER WRITE: demo-netops created a personal object owned by demo-admin.
-        $(printf '%s' "$out" | head -c 200)"
+    bad "CROSS-USER WRITE: bookmark rows owned by demo-admin went ${before} -> ${after}"
+  fi
+  if printf '%s' "$out" | grep -q '\\"status_code\\": 403'; then
+    ok "...and the refusal is a clean 403"
+  else
+    note "refusal status was not 403 — see 8c"
   fi
 
   # Leave nothing behind. These are the script's rows, not the artifact's.
@@ -488,6 +506,44 @@ else
   n=$(dc exec -T db psql -qtAX -U "${POSTGRES_USER:-netbox}" -d "${POSTGRES_DB:-netbox}" \
       -c "SELECT count(*) FROM extras_bookmark;" 2>/dev/null | tr -d '[:space:]')
   [ "${n:-1}" = "0" ] && ok "bookmarks cleaned up" || bad "left ${n} bookmark row(s) behind"
+fi
+
+# ── 8c. Host-raised errors must be legible ─────────────────────────────────
+#
+# THIS IS A PACKAGE-VERSION CHECK, and it is the reason the demo should ship on
+# 1.1.1 or later rather than 1.1.0.
+#
+# frisian-mcp's OWN refusals are fine on both: principal denial is 403, a tool
+# the route ceiling removed is 404. What differs is exceptions raised by the
+# HOST. NetBox raises Django's `Http404` and `django.core.exceptions.
+# PermissionDenied` — not the DRF classes — and 1.1.0 has no translation for
+# them, so both fall through to a generic 500.
+#
+# 1.1.1 added exactly that translation. Its own docstring names the symptom:
+# "retrieve reported status_code: 500 — and 404 and 500 mean very [different
+# things]".
+#
+# Measured on a 1.1.0 build of this host:
+#
+#     dcim/site/retrieve id=9999   -> 500  "No Site matches the given query."
+#
+# 404 tells an agent the object is not there, so it adjusts the query. 500
+# tells it the server is broken, so it retries, backs off, or reports an
+# outage. Guessing an id wrong is the most common thing an agent does here,
+# which makes this the most-hit error path on the whole host.
+hdr "8c. Host-raised errors are legible (404, not 500)"
+out=$(mcp "$TOK_RO" "$DOOR_RO" dcim site retrieve '{"id":9999}')
+if printf '%s' "$out" | grep -q '\\"status_code\\": 404'; then
+  ok "retrieve of a missing object returns 404"
+elif printf '%s' "$out" | grep -q '\\"status_code\\": 500'; then
+  bad "retrieve of a missing object returns 500, not 404.
+        The installed frisian-mcp does not translate Django's Http404 /
+        PermissionDenied into their DRF equivalents. That landed in 1.1.1;
+        1.1.0 does not have it. Rebuild this host on 1.1.1 or later:
+          netbox/publish.sh  ->  FRISIAN_MCP_SOURCE=\"local-wheel:frisian_mcp-1.1.1-...\"
+        Every host-raised 404 and 403 on this host is a 500 until then."
+else
+  bad "retrieve of a missing object returned neither 404 nor 500: $(printf '%s' "$out" | head -c 160)"
 fi
 
 # ── 9. The estate is readable and is the expected one ──────────────────────
