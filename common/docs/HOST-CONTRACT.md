@@ -33,15 +33,31 @@ CI workflows, the docs and the quickstart all address them by path.
 | Path | Purpose | Committed? |
 |---|---|---|
 | `<host>/README.md` | Host quickstart, what the demo contains, first-boot wait, safety banner | yes |
+| `<host>/GETTING-STARTED.md` | Ordered walkthrough: GUI login first, then the agent | yes |
 | `<host>/docker-compose.yml` | **Default path.** Pulls prebuilt images from GHCR | yes |
 | `<host>/docker-compose.build.yml` | Override for building both images locally | yes |
 | `<host>/.env` | Published demo values. **Committed on purpose** — see below | yes |
 | `<host>/.env.example` | Annotated reference for every setting, including ones `.env` omits | yes |
 | `<host>/Dockerfile` | Application image. `FROM` a published upstream image | yes |
 | `<host>/config/` | Configuration files copied into the application image | yes |
+| `<host>/publish.sh` | Builds and publishes the image pair; one `FRISIAN_MCP_SOURCE` line selects the lane | yes |
+| `<host>/.mcp.json` | Claude Code, preconfigured for all three doors | yes |
+| `<host>/.cursor/mcp.json` | Cursor, same three | yes |
+| `<host>/.codex/config.toml` | Codex, same three. Needs `CODEX_HOME="$PWD/.codex"` | yes |
 | `<host>/db/Dockerfile` | Pre-seeded database image | yes |
 | `<host>/db/00-assert-role.sh` | Fails the boot on a mismatched database role | yes |
+| `<host>/db/provision_identities.py` | Creates the identity roster during the seed | yes |
+| `<host>/db/assert-identities.sh` | Asserts that roster INDEPENDENTLY of the provisioner | yes |
 | `<host>/db/demo.sql.gz` | The golden dump | **no — injected by CI** |
+| `common/ci/acceptance-<host>.sh` | Zero-flag acceptance run against a booted stack | yes |
+
+> **The three client configs are the ones that get forgotten.** They are not
+> referenced by any compose file, workflow or script, so nothing fails when
+> they are absent — a host without them boots green, passes acceptance, and
+> publishes. The symptom arrives much later, when someone runs `claude` in the
+> host directory and finds no connectors. The NetBox host shipped that way
+> because this table did not list them; six of the rows above were added after
+> the fact, from what the existing hosts already had.
 
 ### Why `.env` is committed
 
@@ -352,9 +368,18 @@ vendoring it. That requirement is usually a sign the base image is wrong.
 6. `docker-compose.build.yml` — build inputs only. It must not restate ports,
    volumes or environment.
 7. `.env` + `.env.example`.
-8. `README.md` — safety banner, quickstart, observed first-boot restore time.
-9. `.github/workflows/build-<host>.yml` — seed once natively, then bake
-   multi-arch.
-10. Verify the rule: fresh clone, `cd <host>`, `docker compose up`, no flags.
+8. `README.md` — safety banner, quickstart, observed first-boot restore time —
+   and `GETTING-STARTED.md`.
+9. `db/provision_identities.py` + `db/assert-identities.sh`, and
+   `common/ci/acceptance-<host>.sh`.
+10. `publish.sh`, and `.github/workflows/build-<host>.yml` — seed once
+    natively, then bake multi-arch.
+11. **The three client configs**: `.mcp.json`, `.cursor/mcp.json`,
+    `.codex/config.toml`, plus `common/mcp-clients/<host>.mcp.json.template`.
+    Nothing breaks when these are missing, which is exactly why they get
+    skipped — see the note under Required files.
+12. Verify the rule: fresh clone, `cd <host>`, `docker compose up`, no flags.
+13. Verify the connectors too: `cd <host> && claude`, and confirm all three
+    doors are listed. Step 12 passes without them.
 
-Step 10 is the acceptance test. The other nine are how you pass it.
+Steps 12 and 13 are the acceptance test. The rest is how you pass it.

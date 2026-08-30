@@ -186,10 +186,12 @@ ceiling behaviourally rather than trusting the grep.
 
 ## Demo walkthrough
 
-Point a client at all three doors using
-[`../common/mcp-clients/netbox.mcp.json.template`](../common/mcp-clients/netbox.mcp.json.template),
-or use `curl`. `GETTING-STARTED.md` walks the whole thing in order; this is the
-short version of what there is to see.
+Point a client at all three doors — [`.mcp.json`](.mcp.json),
+[`.cursor/mcp.json`](.cursor/mcp.json) and
+[`.codex/config.toml`](.codex/config.toml) are already here, see
+[Connecting an agent](#connecting-an-agent) — or use `curl`.
+`GETTING-STARTED.md` walks the whole thing in order; this is the short version
+of what there is to see.
 
 ### 1. The dispatcher pattern — 10 tools instead of 1,176
 
@@ -321,10 +323,20 @@ invented and correspond to no real network.
 
 ## Connecting an agent
 
-Merge a block from
-[`../common/mcp-clients/netbox.mcp.json.template`](../common/mcp-clients/netbox.mcp.json.template)
-into your client's config. Connect all three entries at once — the comparison
-between them is the demo.
+**Three clients are preconfigured in this directory** — all three doors each,
+nothing to copy:
+
+| client | file | how to pick it up |
+|---|---|---|
+| Claude Code | [`.mcp.json`](.mcp.json) | run `claude` from this directory |
+| Cursor | [`.cursor/mcp.json`](.cursor/mcp.json) | open this directory as the workspace |
+| Codex | [`.codex/config.toml`](.codex/config.toml) | `CODEX_HOME="$PWD/.codex" codex` |
+
+Connect all three entries at once — the comparison between them is the demo.
+
+For any other client, merge a block from
+[`../common/mcp-clients/netbox.mcp.json.template`](../common/mcp-clients/netbox.mcp.json.template),
+which carries the same three entries with the reasoning alongside them.
 
 ---
 

@@ -46,9 +46,15 @@ through different front doors.
 
 ## 2. Point your agent at all three doors
 
-Copy the `mcpServers` block from
-[`../common/mcp-clients/netbox.mcp.json.template`](../common/mcp-clients/netbox.mcp.json.template)
-into your client's configuration. Connect **all three** — the comparison
+**All three are already configured in this directory.** Nothing to copy:
+
+| client | file | how to pick it up |
+|---|---|---|
+| Claude Code | [`.mcp.json`](.mcp.json) | already here — run `claude` from this directory |
+| Cursor | [`.cursor/mcp.json`](.cursor/mcp.json) | already here — open this directory as the workspace |
+| Codex | [`.codex/config.toml`](.codex/config.toml) | `CODEX_HOME="$PWD/.codex" codex` — Codex reads `~/.codex/config.toml` by default, so it needs pointing here |
+
+Each file defines all three connections. Use **all three** — the comparison
 between them is the entire demo.
 
 ```
@@ -56,6 +62,10 @@ netbox-read-only    http://127.0.0.1:8083/api/mcp/read-only    demo-readonly tok
 netbox-read-write   http://127.0.0.1:8083/api/mcp/read-write   demo-netops token
 netbox-ops          http://127.0.0.1:8083/api/mcp/ops          demo-admin token
 ```
+
+For any other client, the same three entries are in
+[`../common/mcp-clients/netbox.mcp.json.template`](../common/mcp-clients/netbox.mcp.json.template)
+with the reasoning alongside them.
 
 Unlike the Nautobot and Paperless demos, these are three different **URLs**, not
 just three different tokens. That is what makes the next few steps possible.
