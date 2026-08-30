@@ -446,6 +446,50 @@ fi
 #   404 — the ceiling removed the tool from this door entirely
 note "403 = principal denies · 404 = ceiling removed the action. Both are correct."
 
+# ── 8b. Personal objects stay personal ─────────────────────────────────────
+#
+# NetBox treats bookmark / notification / subscription as PER-USER objects, so
+# they sit outside ObjectPermission: demo-netops can write them despite a grant
+# that names only dcim and ipam, and they are the one place it gets `destroy`.
+#
+# That is NetBox's model, not a hole in ours — but it is only benign while it
+# stays self-scoped. The check that matters is the SECOND one: if a caller can
+# create a personal row owned by ANOTHER user, this stops being a carve-out and
+# becomes a cross-user write. Asserting only the first half would pass on that.
+hdr "8b. Per-user objects are self-scoped"
+uid_netops=$(dc exec -T db psql -qtAX -U "${POSTGRES_USER:-netbox}" -d "${POSTGRES_DB:-netbox}" \
+  -c "SELECT id FROM users_user WHERE username='demo-netops';" 2>/dev/null | tr -d '[:space:]')
+uid_admin=$(dc exec -T db psql -qtAX -U "${POSTGRES_USER:-netbox}" -d "${POSTGRES_DB:-netbox}" \
+  -c "SELECT id FROM users_user WHERE username='demo-admin';" 2>/dev/null | tr -d '[:space:]')
+
+if [ -z "$uid_netops" ] || [ -z "$uid_admin" ]; then
+  bad "could not resolve the demo user ids; skipping the self-scoping check"
+else
+  out=$(mcp "$TOK_NO" "$DOOR_RW" extras bookmark create \
+        "{\"object_type\":\"dcim.site\",\"object_id\":1,\"user\":\"$uid_netops\"}")
+  if printf '%s' "$out" | grep -q '\\"status_code\\": 201'; then
+    ok "demo-netops may bookmark for ITSELF (201)"
+  else
+    bad "demo-netops could not create its own bookmark: $(printf '%s' "$out" | head -c 160)"
+  fi
+
+  out=$(mcp "$TOK_NO" "$DOOR_RW" extras bookmark create \
+        "{\"object_type\":\"dcim.site\",\"object_id\":2,\"user\":\"$uid_admin\"}")
+  if printf '%s' "$out" | grep -q '403'; then
+    ok "demo-netops may NOT bookmark for another user (403)"
+  else
+    bad "CROSS-USER WRITE: demo-netops created a personal object owned by demo-admin.
+        $(printf '%s' "$out" | head -c 200)"
+  fi
+
+  # Leave nothing behind. These are the script's rows, not the artifact's.
+  dc exec -T db psql -qtAX -U "${POSTGRES_USER:-netbox}" -d "${POSTGRES_DB:-netbox}" \
+    -c "DELETE FROM extras_bookmark;" >/dev/null 2>&1
+  n=$(dc exec -T db psql -qtAX -U "${POSTGRES_USER:-netbox}" -d "${POSTGRES_DB:-netbox}" \
+      -c "SELECT count(*) FROM extras_bookmark;" 2>/dev/null | tr -d '[:space:]')
+  [ "${n:-1}" = "0" ] && ok "bookmarks cleaned up" || bad "left ${n} bookmark row(s) behind"
+fi
+
 # ── 9. The estate is readable and is the expected one ──────────────────────
 hdr "9. Estate"
 out=$(mcp "$TOK_RO" "$DOOR_RO" dcim site list '{}')
