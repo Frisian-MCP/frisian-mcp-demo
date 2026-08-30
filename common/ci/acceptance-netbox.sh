@@ -446,6 +446,105 @@ fi
 #   404 — the ceiling removed the tool from this door entirely
 note "403 = principal denies · 404 = ceiling removed the action. Both are correct."
 
+# ── 8b. Personal objects stay personal ─────────────────────────────────────
+#
+# NetBox treats bookmark / notification / subscription as PER-USER objects, so
+# they sit outside ObjectPermission: demo-netops can write them despite a grant
+# that names only dcim and ipam, and they are the one place it gets `destroy`.
+#
+# That is NetBox's model, not a hole in ours — but it is only benign while it
+# stays self-scoped. The check that matters is the SECOND one: if a caller can
+# create a personal row owned by ANOTHER user, this stops being a carve-out and
+# becomes a cross-user write. Asserting only the first half would pass on that.
+hdr "8b. Per-user objects are self-scoped"
+uid_netops=$(dc exec -T db psql -qtAX -U "${POSTGRES_USER:-netbox}" -d "${POSTGRES_DB:-netbox}" \
+  -c "SELECT id FROM users_user WHERE username='demo-netops';" 2>/dev/null | tr -d '[:space:]')
+uid_admin=$(dc exec -T db psql -qtAX -U "${POSTGRES_USER:-netbox}" -d "${POSTGRES_DB:-netbox}" \
+  -c "SELECT id FROM users_user WHERE username='demo-admin';" 2>/dev/null | tr -d '[:space:]')
+
+if [ -z "$uid_netops" ] || [ -z "$uid_admin" ]; then
+  bad "could not resolve the demo user ids; skipping the self-scoping check"
+else
+  out=$(mcp "$TOK_NO" "$DOOR_RW" extras bookmark create \
+        "{\"object_type\":\"dcim.site\",\"object_id\":1,\"user\":\"$uid_netops\"}")
+  if printf '%s' "$out" | grep -q '\\"status_code\\": 201'; then
+    ok "demo-netops may bookmark for ITSELF (201)"
+  else
+    bad "demo-netops could not create its own bookmark: $(printf '%s' "$out" | head -c 160)"
+  fi
+
+  # Asserted on the DATABASE, not on the status code.
+  #
+  # An earlier version of this check grepped for 403 and called anything else a
+  # cross-user write. On frisian-mcp 1.1.0 the refusal arrives as a 500 (see
+  # 8c), so it reported a successful cross-user write that had not happened —
+  # a false alarm on the most alarming wording in this file.
+  #
+  # The security question is "did a row land?". Answer that directly, then
+  # judge the status code separately.
+  before=$(dc exec -T db psql -qtAX -U "${POSTGRES_USER:-netbox}" -d "${POSTGRES_DB:-netbox}" \
+    -c "SELECT count(*) FROM extras_bookmark WHERE user_id=${uid_admin};" 2>/dev/null | tr -d '[:space:]')
+  out=$(mcp "$TOK_NO" "$DOOR_RW" extras bookmark create \
+        "{\"object_type\":\"dcim.site\",\"object_id\":2,\"user\":\"$uid_admin\"}")
+  after=$(dc exec -T db psql -qtAX -U "${POSTGRES_USER:-netbox}" -d "${POSTGRES_DB:-netbox}" \
+    -c "SELECT count(*) FROM extras_bookmark WHERE user_id=${uid_admin};" 2>/dev/null | tr -d '[:space:]')
+
+  if [ "${before:-0}" = "${after:-1}" ]; then
+    ok "demo-netops did NOT create a row owned by demo-admin (${after} before and after)"
+  else
+    bad "CROSS-USER WRITE: bookmark rows owned by demo-admin went ${before} -> ${after}"
+  fi
+  if printf '%s' "$out" | grep -q '\\"status_code\\": 403'; then
+    ok "...and the refusal is a clean 403"
+  else
+    note "refusal status was not 403 — see 8c"
+  fi
+
+  # Leave nothing behind. These are the script's rows, not the artifact's.
+  dc exec -T db psql -qtAX -U "${POSTGRES_USER:-netbox}" -d "${POSTGRES_DB:-netbox}" \
+    -c "DELETE FROM extras_bookmark;" >/dev/null 2>&1
+  n=$(dc exec -T db psql -qtAX -U "${POSTGRES_USER:-netbox}" -d "${POSTGRES_DB:-netbox}" \
+      -c "SELECT count(*) FROM extras_bookmark;" 2>/dev/null | tr -d '[:space:]')
+  [ "${n:-1}" = "0" ] && ok "bookmarks cleaned up" || bad "left ${n} bookmark row(s) behind"
+fi
+
+# ── 8c. Host-raised errors must be legible ─────────────────────────────────
+#
+# frisian-mcp's OWN refusals are 403 (principal denied) and 404 (ceiling
+# removed the tool). This checks the third class: exceptions raised by the HOST.
+#
+# NetBox raises Django's `Http404` and `django.core.exceptions.PermissionDenied`
+# — not the DRF classes — and the package translates them into their DRF
+# equivalents. Without that translation both fall through to a generic 500.
+#
+# 404 tells an agent the object is not there, so it adjusts the query. 500 tells
+# it the server is broken, so it retries, backs off, or reports an outage.
+# Guessing an id wrong is the most common thing an agent does here, which makes
+# this the most-hit error path on the host.
+#
+# ⚠️ THIS CHECK EXISTS BECAUSE OF A STALE BUILD INPUT, NOT A PACKAGE BUG.
+#
+# It first failed against a wheel FILENAMED 1.1.0 that predated the translation.
+# The version in a wheel's name says nothing about what is inside it, and two
+# different 1.1.0 wheels were on disk with different contents. Build the wheel
+# from a clean `git archive origin/main` export — never from `frisian-mcp/dist/`
+# and never from a working checkout. See <host>/wheels/README.md, which
+# documents that trap and the procedure.
+hdr "8c. Host-raised errors are legible (404, not 500)"
+out=$(mcp "$TOK_RO" "$DOOR_RO" dcim site retrieve '{"id":9999}')
+if printf '%s' "$out" | grep -q '\\"status_code\\": 404'; then
+  ok "retrieve of a missing object returns 404"
+elif printf '%s' "$out" | grep -q '\\"status_code\\": 500'; then
+  bad "retrieve of a missing object returns 500, not 404.
+        The installed frisian-mcp does not translate Django's Http404 /
+        PermissionDenied into their DRF equivalents. That landed in 1.1.1;
+        1.1.0 does not have it. Rebuild this host on 1.1.1 or later:
+          netbox/publish.sh  ->  FRISIAN_MCP_SOURCE=\"local-wheel:frisian_mcp-1.1.1-...\"
+        Every host-raised 404 and 403 on this host is a 500 until then."
+else
+  bad "retrieve of a missing object returned neither 404 nor 500: $(printf '%s' "$out" | head -c 160)"
+fi
+
 # ── 9. The estate is readable and is the expected one ──────────────────────
 hdr "9. Estate"
 out=$(mcp "$TOK_RO" "$DOOR_RO" dcim site list '{}')

@@ -71,8 +71,22 @@ note "credential-shaped tables discovered: ${#candidates[@]}"
 # The OAuth client count is DECLARED, not guessed. What ships is the client
 # registered during the build (B4), so the count is not knowable when this
 # script is written — the operator states it at assert time and the assertion
-# holds them to it. Default 0 so a pre-B4 run is meaningful.
-: "${DEMO_EXPECTED_OAUTH_CLIENTS:=0}"
+# holds them to it.
+#
+# DEFAULT CORRECTED 0 -> 1, measured 2026-08-30. The shipped dump carries the
+# published browser client, exactly as the Paperless and NetBox hosts do:
+#
+#   frisian-demo-public-client-id / frisian-demo-browser-client
+#   tier read, redirects to claude.ai + 127.0.0.1:8080, active
+#
+# A default of 0 made this script FAIL against the artifact it exists to
+# validate, and nothing anywhere set the variable to 1 — not CI, not the
+# runbook, not the host README. An override that nobody overrides is a default,
+# and this one was wrong.
+#
+# It stays a variable rather than a hardcoded 1 so a pre-B4 dump can still be
+# checked with DEMO_EXPECTED_OAUTH_CLIENTS=0.
+: "${DEMO_EXPECTED_OAUTH_CLIENTS:=1}"
 
 declare -A EXPECTED=(
   [auth_user]=3                              # demo-readonly, demo-netops, demo-admin

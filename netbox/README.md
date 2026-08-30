@@ -132,6 +132,9 @@ frisian-demo-admin-token-public-do-not-reuse
 Its door permits the write tier across eight dispatch groups. The identity can
 write in two. And within those two it holds **add and change but not delete**.
 
+There is a third thing it can write, and it is NetBox's doing rather than the
+grant's — see [Personal objects](#personal-objects-netboxs-own-carve-out) below.
+
 So there are three different limits stacked on one caller, and each is visible
 separately:
 
@@ -275,6 +278,41 @@ The `destroy` row is worth a second look: that action is **absent from `help`**
 *and* returns 403 when attempted anyway. That is one control observed twice —
 discovery declines to offer it, the dispatcher declines to run it. Only the
 route ceiling yields a 404.
+
+### Personal objects — NetBox's own carve-out
+
+If you total up what `demo-netops` is offered, three `extras` resources carry
+writes that its grant does not mention — and they carry `destroy`, which it has
+nowhere else:
+
+```
+extras/bookmark      create, update, partial_update, destroy, bulk_*
+extras/notification  create, update, partial_update, destroy, bulk_*
+extras/subscription  create, update, partial_update, destroy, bulk_*
+```
+
+This is not a hole in the grant, and it is not frisian-mcp adding anything.
+NetBox treats these three as **per-user personal objects** rather than estate
+objects, so they sit outside `ObjectPermission` entirely: any authenticated user
+may manage their own. Measured, on the read-write door:
+
+| attempt | result |
+|---|---|
+| `demo-netops` bookmarks a site **for itself** | `201` |
+| `demo-netops` bookmarks a site **for `demo-admin`** | `403` |
+
+So the capability is real and it is confined to the caller's own rows. It
+cannot touch the estate — a bookmark is a pointer (`object_type`, `object_id`,
+`user`), not a copy — and it cannot reach another user.
+
+It is worth knowing precisely because it looks like an anomaly at first glance.
+The gateway is reflecting the host's permission model faithfully, *including*
+the places where that model has a per-user carve-out. A tool surface that
+matched the `ObjectPermission` rows and nothing else would be a tidier story and
+a less accurate one.
+
+`common/ci/acceptance-netbox.sh` pins both halves of this — that the self-write
+works, and that the cross-user write is refused.
 
 ### 6. Writes come back lean
 

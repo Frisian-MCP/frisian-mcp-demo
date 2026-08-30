@@ -22,7 +22,7 @@
 # pre-release suffix on the tag, and the provenance labels. Nothing else in
 # this file, the workflow, or the compose files needs editing.
 #
-FRISIAN_MCP_SOURCE="local-wheel:frisian_mcp-1.1.1-py3-none-any.whl"
+FRISIAN_MCP_SOURCE="local-wheel:frisian_mcp-1.1.0-py3-none-any.whl"
 #
 # ─────────────────────────────────────────────────────────────────────────────
 
