@@ -510,27 +510,26 @@ fi
 
 # ── 8c. Host-raised errors must be legible ─────────────────────────────────
 #
-# THIS IS A PACKAGE-VERSION CHECK, and it is the reason the demo should ship on
-# 1.1.1 or later rather than 1.1.0.
+# frisian-mcp's OWN refusals are 403 (principal denied) and 404 (ceiling
+# removed the tool). This checks the third class: exceptions raised by the HOST.
 #
-# frisian-mcp's OWN refusals are fine on both: principal denial is 403, a tool
-# the route ceiling removed is 404. What differs is exceptions raised by the
-# HOST. NetBox raises Django's `Http404` and `django.core.exceptions.
-# PermissionDenied` — not the DRF classes — and 1.1.0 has no translation for
-# them, so both fall through to a generic 500.
+# NetBox raises Django's `Http404` and `django.core.exceptions.PermissionDenied`
+# — not the DRF classes — and the package translates them into their DRF
+# equivalents. Without that translation both fall through to a generic 500.
 #
-# 1.1.1 added exactly that translation. Its own docstring names the symptom:
-# "retrieve reported status_code: 500 — and 404 and 500 mean very [different
-# things]".
+# 404 tells an agent the object is not there, so it adjusts the query. 500 tells
+# it the server is broken, so it retries, backs off, or reports an outage.
+# Guessing an id wrong is the most common thing an agent does here, which makes
+# this the most-hit error path on the host.
 #
-# Measured on a 1.1.0 build of this host:
+# ⚠️ THIS CHECK EXISTS BECAUSE OF A STALE BUILD INPUT, NOT A PACKAGE BUG.
 #
-#     dcim/site/retrieve id=9999   -> 500  "No Site matches the given query."
-#
-# 404 tells an agent the object is not there, so it adjusts the query. 500
-# tells it the server is broken, so it retries, backs off, or reports an
-# outage. Guessing an id wrong is the most common thing an agent does here,
-# which makes this the most-hit error path on the whole host.
+# It first failed against a wheel FILENAMED 1.1.0 that predated the translation.
+# The version in a wheel's name says nothing about what is inside it, and two
+# different 1.1.0 wheels were on disk with different contents. Build the wheel
+# from a clean `git archive origin/main` export — never from `frisian-mcp/dist/`
+# and never from a working checkout. See <host>/wheels/README.md, which
+# documents that trap and the procedure.
 hdr "8c. Host-raised errors are legible (404, not 500)"
 out=$(mcp "$TOK_RO" "$DOOR_RO" dcim site retrieve '{"id":9999}')
 if printf '%s' "$out" | grep -q '\\"status_code\\": 404'; then
