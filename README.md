@@ -3,7 +3,7 @@
 Clone-and-run demos of [frisian-mcp](https://github.com/Frisian-MCP/frisian-mcp)
 against real host applications. Each demo ships a pre-built estate and
 pre-provisioned agent identities, so you can reach a real tool call in about a
-minute. Nautobot was the first host; Paperless-ngx is the second.
+minute. Nautobot was the first host, Paperless-ngx the second, NetBox the third.
 
 ## Safety: localhost demo only
 
@@ -118,7 +118,7 @@ Each host directory is self-contained, and the entry path is always the same:
 
 ```bash
 cd <host>
-docker compose up            # netbox: use `up -d`, see its README
+docker compose up
 ```
 
 Start with the host README —

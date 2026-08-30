@@ -7,12 +7,16 @@ Start the stack first:
 
 ```bash
 cd netbox
-docker compose up -d
+docker compose up
 ```
 
+Same entry path as the other demo hosts — no flag, no profile. Both images pull
+from GHCR; nothing builds locally. Add `-d` if you would rather have the
+terminal back.
+
 First boot takes a couple of minutes, and the `netbox` container restarts itself
-once while it waits for the database. That is normal — do not add `--wait`,
-which treats that restart as a failed start. Watch progress with
+once while it waits for the database. That is normal. If you script the boot, do
+not add `--wait` — it treats that restart as a failed start. Watch progress with
 `docker compose logs -f netbox`.
 
 ---

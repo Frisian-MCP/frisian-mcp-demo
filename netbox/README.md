@@ -47,8 +47,13 @@ came to see.
 
 ```bash
 cd netbox
-docker compose up -d
+docker compose up
 ```
+
+Exactly the same entry path as the Nautobot and Paperless hosts — no flag, no
+profile, no `-f` chain. Both images are pulled from GHCR; nothing builds
+locally. `docker compose up -d` works identically if you would rather have the
+terminal back.
 
 Then open **<http://127.0.0.1:8083/>**.
 
@@ -66,13 +71,17 @@ the web interface too, so you can check its answers against the same data
 rather than taking them on trust — and when a write is refused, you can confirm
 in the UI that nothing changed.
 
-### `up -d`, and why not `--wait`
+### One restart during first boot is normal — and why nothing here uses `--wait`
 
-The `netbox` container restarts itself once during first boot, while it waits
-for Postgres to accept connections. That restart is normal. `docker compose up
--d --wait` reads it as a failed start and gives up on a stack that is coming up
-correctly, so this host's instructions, CI and acceptance script all poll for
-health instead.
+The `netbox` container restarts itself once while it waits for Postgres to
+accept connections. In the foreground you will see it go down and come back.
+That is part of starting, not a failure.
+
+It matters if you script the boot: `docker compose up -d --wait` reads that
+restart as a failed start and gives up on a stack that is coming up correctly.
+CI and `common/ci/acceptance-netbox.sh` poll for the healthcheck instead. The
+quickstart above is unaffected — it does not use `--wait`, and neither do the
+other hosts' quickstarts.
 
 First boot takes a couple of minutes. Watch it with:
 

@@ -14,7 +14,7 @@ at the bottom.
 |---|---|---|---|
 | Nautobot | `cd nautobot && docker compose up` | `http://127.0.0.1:8080` | [`nautobot.mcp.json.template`](nautobot.mcp.json.template) |
 | Paperless-ngx | `cd paperless && docker compose up` | `http://127.0.0.1:8081` | [`paperless.mcp.json.template`](paperless.mcp.json.template) |
-| NetBox | `cd netbox && docker compose up -d` | `http://127.0.0.1:8083` | [`netbox.mcp.json.template`](netbox.mcp.json.template) |
+| NetBox | `cd netbox && docker compose up` | `http://127.0.0.1:8083` | [`netbox.mcp.json.template`](netbox.mcp.json.template) |
 
 **One difference worth knowing before you connect.** On Nautobot and Paperless
 the three client entries share a mount point and differ only by token. On
