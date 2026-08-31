@@ -118,6 +118,7 @@ jobs:
     outputs:
       demo_tag: ${{ steps.tag.outputs.demo_tag }}
       publish: ${{ steps.tag.outputs.publish }}
+      skip: ${{ steps.tag.outputs.skip }}
       spec: ${{ steps.tag.outputs.spec }}
       local_wheel: ${{ steps.tag.outputs.local_wheel }}
       lane: ${{ steps.tag.outputs.lane }}
@@ -138,6 +139,7 @@ jobs:
           VAR_SPEC: ${{ vars.FRISIAN_MCP_SPEC }}
         run: |
           set -euo pipefail
+          skip=false
           if [ "${{ github.event_name }}" = "push" ]; then
             # A merge to main. Every value is derived from the tree that was
             # merged -- there are no inputs on this trigger, and that is the
@@ -164,8 +166,23 @@ jobs:
               # Failing instead would put a red X on every merge to main, and a
               # check that always fails is a check everyone learns to ignore --
               # including on the merge where it means something.
+              # ⚠️ SKIP, DO NOT JUST SET publish=false.
+              #
+              # The comment above is right that failing every merge is wrong —
+              # but that is exactly what happened, because publish=false alone
+              # let the run fall through to the "no frisian-mcp source
+              # selected" guard further down, which exits 1. The notice said
+              # "building and verifying only"; the guard then errored because
+              # there was nothing to build FROM. Measured 2026-08-30: 6 red
+              # runs across the three hosts, every merge to main.
+              #
+              # There is genuinely no source here. The rehearsal lane needs a
+              # wheel under <host>/wheels/, those are gitignored by design, and
+              # a CI checkout has none — so until FRISIAN_MCP_SPEC is set there
+              # is nothing to build, not merely nothing to publish.
               publish=false
-              echo "::notice::FRISIAN_MCP_SPEC is unset. Building and verifying only; nothing will be published."
+              skip=true
+              echo "::notice::FRISIAN_MCP_SPEC is unset and CI has no rehearsal wheel (they are gitignored), so there is nothing to build. Skipping. Set the FRISIAN_MCP_SPEC repository variable once frisian-mcp is on PyPI to build and publish on merge."
             else
               publish=true
             fi
@@ -197,6 +214,16 @@ jobs:
             echo "::error::Both frisian_mcp_spec and frisian_mcp_local_wheel are set. Pick one lane."
             exit 1
           fi
+          # Emitted BEFORE the source guard below: a deliberately skipped run
+          # must not trip a check about a source it was never going to have.
+          if [ "$skip" = "true" ]; then
+            echo "skip=true"     >> "$GITHUB_OUTPUT"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "demo_tag=$tag" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
           if [ -z "$spec" ] && [ -z "$wheel" ]; then
             echo "::error::No frisian-mcp source selected, and there is no default."
             echo "  testpypi/release lane: frisian_mcp_spec"
@@ -283,6 +310,7 @@ jobs:
     name: Build the estate
     runs-on: ubuntu-latest
     needs: resolve
+    if: needs.resolve.outputs.skip != 'true'
     steps:
       - uses: actions/checkout@v4
 
