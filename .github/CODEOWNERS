@@ -1,0 +1,57 @@
+# Review gate for this repository.
+#
+# Matches the package repo (Frisian-MCP/frisian-mcp), which uses the same
+# single global rule and the same team.
+#
+# ── WHY ONE GLOBAL RULE AND NOT PER-PATH GLOBS ─────────────────────────────
+#
+# An earlier version of this file listed the publish-triggering paths
+# explicitly — /.github/workflows/, /nautobot/, /common/, /paperless/ — with
+# the stated intent of keeping them identical to the `paths:` filter on each
+# workflow's `push: branches: [main]` trigger, so that "a change that can cause
+# a publish is a change that needs a review" was true rather than aspirational.
+#
+# That intent was right and the mechanism drifted anyway: `netbox/` was added as
+# a third host and never made it into the list, so every change to it was
+# unowned. A rule that has to be updated in two places whenever a host is added
+# will eventually be updated in one.
+#
+# `*` cannot drift. It already covers all three hosts and any fourth, and it is
+# a superset of every workflow `paths:` filter, so the guarantee holds by
+# construction instead of by remembering.
+#
+# ── WHY THE TEAM AND NOT INDIVIDUAL HANDLES ────────────────────────────────
+#
+# ⚠️ A team with NO access to the repository is dropped from CODEOWNERS
+# SILENTLY — no error on the pull request, no owner assigned, and a "require
+# review from Code Owners" rule then finds nobody to require. This file
+# previously listed five individuals for exactly that reason, measured
+# 2026-08-25, when `/repos/Frisian-MCP/frisian-mcp-demo/teams` was empty.
+#
+# That is no longer true. Re-measured 2026-08-31:
+#
+#     gh api /repos/Frisian-MCP/frisian-mcp-demo/teams
+#       -> core-maintainers: push
+#
+# So the team resolves here now. It is preferred over handles because a roster
+# written into a file goes stale, and because one of the maintainer handles has
+# a near-identical impostor differing by a single letter — naming the team
+# removes the chance of typing the wrong one into an access control.
+#
+# ── VERIFYING, AFTER ANY CHANGE TO THIS FILE ───────────────────────────────
+#
+# Do not assume an entry resolved. Ask GitHub:
+#
+#     gh api /repos/Frisian-MCP/frisian-mcp-demo/codeowners/errors
+#
+# An empty `errors` array is the confirmation. That endpoint is the check
+# precisely because the failure mode above is silent.
+#
+# ── THIS FILE IS ONLY HALF THE CONTROL ─────────────────────────────────────
+#
+# It names who must approve; it does not require the approval. That comes from
+# a ruleset on `main` with "Require review from Code Owners" enabled. Without
+# one, this file is documentation.
+
+# Global owner - all files
+* @Frisian-MCP/core-maintainers
