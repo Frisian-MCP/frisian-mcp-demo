@@ -1,0 +1,246 @@
+# Build and publish the Teable demo images (Nest host, Phase 7).
+#
+# BAKE ONLY for tip work. This workflow does not seed — see the note below.
+#
+# Teable is the first Nest host in frisian-mcp-demo. The workflow structure
+# mirrors build-nautobot.yml with npm-specific lanes instead of pip.
+#
+#   resolve   derive one DEMO_TAG; both images take it
+#   artifact  (deferred — no golden SQL for Phase 7 tip work yet)
+#   verify    build both images amd64-only, run the real zero-flag path
+#   publish   linux/amd64 + linux/arm64, pushed. Gated.
+#
+# NOTE: For Phase 7 tip work, there is NO golden SQL dump yet. Identity
+# provisioning is a placeholder, and the db image documents the gap honestly
+# in db/Dockerfile. The workflow accepts this and verifies the app build +
+# package assertions. Full seed/provision/assert flow is deferred.
+
+name: build-teable
+
+on:
+  workflow_dispatch:
+    inputs:
+      demo_tag:
+        description: "Tag applied to BOTH images (app and db). Lockstep — never set these separately."
+        required: true
+        type: string
+      frisian_npm_lane:
+        description: "npm lane: 'rehearsal' (local tarballs), 'npm-next' (registry next), or 'release' (immutable npm). Dispatch never publishes."
+        required: false
+        default: npm-next
+        type: choice
+        options: [rehearsal, npm-next, release]
+
+  # PUBLISHING HAPPENS HERE when merged to main (same as Python hosts).
+  # Disabled for Phase 7 tip work — enable when:
+  #   1. Golden SQL dump exists and is injected by CI
+  #   2. Identity provisioning is implemented and verified
+  #   3. Jeremy approves GHCR publish for Teable host
+  #
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - 'teable/**'
+  #     - 'common/**'
+  #     - '.github/workflows/build-teable.yml'
+
+concurrency:
+  group: build-teable-${{ github.event.inputs.demo_tag || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  APP_IMAGE: ghcr.io/frisian-mcp/demo-teable
+  DB_IMAGE: ghcr.io/frisian-mcp/demo-teable-db
+  
+  # Tip bar for Phase 7 (adjust when packages advance)
+  FRISIAN_NESTJS_TEST_VERSION: "0.0.4-rc.3"
+  FRISIAN_CORE_TEST_VERSION: "0.1.0-rc.14"
+  MCP_SDK_VERSION: "^1.30.0"
+
+jobs:
+  resolve:
+    name: Resolve the lockstep tag
+    runs-on: ubuntu-latest
+    outputs:
+      demo_tag: ${{ steps.tag.outputs.demo_tag }}
+      publish: ${{ steps.tag.outputs.publish }}
+      skip: ${{ steps.tag.outputs.skip }}
+      lane: ${{ steps.tag.outputs.lane }}
+      frisian_npm_next: ${{ steps.tag.outputs.frisian_npm_next }}
+      frisian_local_tarballs: ${{ steps.tag.outputs.frisian_local_tarballs }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          skip=false
+          publish=false  # Hardcoded false for Phase 7 tip — no publish yet
+          
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Push to main (disabled for tip work, but structure is ready)
+            tag="$(sed -n 's/^DEMO_TAG=//p' teable/.env | head -1)"
+            [ -n "$tag" ] || {
+              echo "::error::No DEMO_TAG in teable/.env"
+              exit 1; }
+            lane=release
+            npm_next=""
+            local_tarballs=""
+            # When enabled, set publish=true and verify FRISIAN_NPM_* vars
+          else
+            # Dispatch: build and verify only, never publish
+            tag="${{ github.event.inputs.demo_tag }}"
+            lane="${{ github.event.inputs.frisian_npm_lane }}"
+            lane="${lane:-npm-next}"
+          fi
+          
+          case "$lane" in
+            rehearsal)
+              # Local tarballs — gitignored, so CI cannot have them
+              skip=true
+              npm_next=""
+              local_tarballs="1"
+              echo "::notice::lane=rehearsal needs local tarballs (gitignored), so CI cannot build. Skipping."
+              ;;
+            npm-next)
+              npm_next="1"
+              local_tarballs=""
+              ;;
+            release)
+              npm_next=""
+              local_tarballs=""
+              ;;
+            *)
+              echo "::error::Unknown lane '$lane'"
+              exit 1
+              ;;
+          esac
+          
+          [ -n "$tag" ] || { echo "::error::No demo tag resolved"; exit 1; }
+          
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "demo_tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "lane=$lane" >> "$GITHUB_OUTPUT"
+          echo "frisian_npm_next=$npm_next" >> "$GITHUB_OUTPUT"
+          echo "frisian_local_tarballs=$local_tarballs" >> "$GITHUB_OUTPUT"
+          
+          echo "Resolved: tag=$tag lane=$lane publish=$publish skip=$skip"
+
+  verify:
+    name: Verify (amd64, not published)
+    runs-on: ubuntu-latest
+    needs: [resolve]
+    if: needs.resolve.outputs.skip != 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      # NOTE: No artifact download for Phase 7 tip — db/demo.sql.gz does not
+      # exist yet, and db/Dockerfile documents this honestly.
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build both images, amd64 only, loaded locally
+        env:
+          DEMO_TAG: ${{ needs.resolve.outputs.demo_tag }}
+          NPM_NEXT: ${{ needs.resolve.outputs.frisian_npm_next }}
+          LOCAL_TARBALLS: ${{ needs.resolve.outputs.frisian_local_tarballs }}
+        run: |
+          set -euo pipefail
+          # db image first (even though it has no dump yet for tip work)
+          docker buildx build --load --platform linux/amd64 \
+            -t "${DB_IMAGE}:${DEMO_TAG}" -f teable/db/Dockerfile teable/
+          
+          # app image
+          docker buildx build --load --platform linux/amd64 \
+            --build-arg "FRISIAN_NPM_NEXT=${NPM_NEXT}" \
+            --build-arg "FRISIAN_LOCAL_TARBALLS=${LOCAL_TARBALLS}" \
+            --build-arg "FRISIAN_NESTJS_TEST_VERSION=${FRISIAN_NESTJS_TEST_VERSION}" \
+            --build-arg "FRISIAN_CORE_TEST_VERSION=${FRISIAN_CORE_TEST_VERSION}" \
+            --build-arg "MCP_SDK_VERSION=${MCP_SDK_VERSION}" \
+            -t "${APP_IMAGE}:${DEMO_TAG}" -f teable/Dockerfile teable/
+
+      - name: Acceptance — the zero-flag path
+        env:
+          DEMO_TAG: ${{ needs.resolve.outputs.demo_tag }}
+        run: |
+          set -euo pipefail
+          cd teable
+          docker compose up -d --wait --wait-timeout 600
+
+      - name: Run acceptance checks
+        run: |
+          set -euo pipefail
+          if [ ! -x common/ci/acceptance-teable.sh ]; then
+            echo "::error::common/ci/acceptance-teable.sh missing or not executable"
+            exit 1
+          fi
+          ./common/ci/acceptance-teable.sh
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          cd teable
+          docker compose ps || true
+          docker compose logs --no-color --tail 200 || true
+
+      - name: Tear down
+        if: always()
+        run: cd teable && docker compose down -v || true
+
+  # publish job is COMMENTED OUT for Phase 7 tip work. Uncomment when:
+  #   1. Golden SQL dump workflow is ready
+  #   2. Identity provisioning is implemented
+  #   3. Acceptance passes with full MCP door checks
+  #   4. Jeremy approves GHCR publish for this host
+  #
+  # publish:
+  #   name: Publish (multi-arch)
+  #   runs-on: ubuntu-latest
+  #   needs: [resolve, verify]
+  #   if: needs.resolve.outputs.publish == 'true'
+  #   environment: ghcr-publish
+  #   permissions:
+  #     contents: read
+  #     packages: write
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: docker/setup-qemu-action@v3
+  #       with:
+  #         platforms: arm64
+  #     - uses: docker/setup-buildx-action@v3
+  #     - uses: docker/login-action@v3
+  #       with:
+  #         registry: ${{ env.REGISTRY }}
+  #         username: ${{ github.actor }}
+  #         password: ${{ secrets.GITHUB_TOKEN }}
+  #     
+  #     - name: Push the db image (multi-arch)
+  #       uses: docker/build-push-action@v6
+  #       with:
+  #         context: ./teable
+  #         file: ./teable/db/Dockerfile
+  #         platforms: linux/amd64,linux/arm64
+  #         push: true
+  #         tags: ${{ env.DB_IMAGE }}:${{ needs.resolve.outputs.demo_tag }}
+  #     
+  #     - name: Push the app image (multi-arch)
+  #       uses: docker/build-push-action@v6
+  #       with:
+  #         context: ./teable
+  #         file: ./teable/Dockerfile
+  #         platforms: linux/amd64,linux/arm64
+  #         push: true
+  #         tags: ${{ env.APP_IMAGE }}:${{ needs.resolve.outputs.demo_tag }}
+  #         build-args: |
+  #           FRISIAN_NPM_NEXT=${{ needs.resolve.outputs.frisian_npm_next }}
+  #           FRISIAN_LOCAL_TARBALLS=${{ needs.resolve.outputs.frisian_local_tarballs }}

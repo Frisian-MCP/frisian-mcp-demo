@@ -1,0 +1,27 @@
+# Codex MCP client configuration for Teable demo host.
+#
+# Usage:
+#   CODEX_HOME="$PWD/.codex" codex
+#
+# The mcpServers section declares the three frisian-mcp doors.
+
+[mcpServers.teable-read-only]
+type = "http"
+url = "http://127.0.0.1:3000/api/mcp/read-only"
+
+[mcpServers.teable-read-only.headers]
+Authorization = "Bearer frisian-demo-readonly-token-public-do-not-reuse"
+
+[mcpServers.teable-read-write]
+type = "http"
+url = "http://127.0.0.1:3000/api/mcp/read-write"
+
+[mcpServers.teable-read-write.headers]
+Authorization = "Bearer frisian-demo-user-token-public-do-not-reuse"
+
+[mcpServers.teable-ops]
+type = "http"
+url = "http://127.0.0.1:3000/api/mcp/ops"
+
+[mcpServers.teable-ops.headers]
+Authorization = "Bearer frisian-demo-admin-token-public-do-not-reuse"
