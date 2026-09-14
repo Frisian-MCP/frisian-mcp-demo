@@ -1,0 +1,26 @@
+---
+# Build override for the Teable demo host.
+#
+# This file contains ONLY build inputs. It must not restate ports, volumes or
+# environment — those stay in docker-compose.yml so a build compose doesn't
+# silently diverge from the published shape.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml build
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up
+
+services:
+  teable:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Set exactly one: FRISIAN_NPM_NEXT=1 or FRISIAN_LOCAL_TARBALLS=1
+        # See Dockerfile for lane details.
+        FRISIAN_NPM_NEXT: "${FRISIAN_NPM_NEXT:-}"
+        FRISIAN_LOCAL_TARBALLS: "${FRISIAN_LOCAL_TARBALLS:-}"
+
+  db:
+    build:
+      context: .
+      dockerfile: db/Dockerfile

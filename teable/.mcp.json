@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "teable-read-only": {
+      "type": "http",
+      "url": "http://127.0.0.1:3000/api/mcp/read-only",
+      "headers": {
+        "Authorization": "Bearer frisian-demo-readonly-token-public-do-not-reuse"
+      }
+    },
+    "teable-read-write": {
+      "type": "http",
+      "url": "http://127.0.0.1:3000/api/mcp/read-write",
+      "headers": {
+        "Authorization": "Bearer frisian-demo-user-token-public-do-not-reuse"
+      }
+    },
+    "teable-ops": {
+      "type": "http",
+      "url": "http://127.0.0.1:3000/api/mcp/ops",
+      "headers": {
+        "Authorization": "Bearer frisian-demo-admin-token-public-do-not-reuse"
+      }
+    }
+  }
+}

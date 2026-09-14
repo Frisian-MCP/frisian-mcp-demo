@@ -1,0 +1,104 @@
+---
+# frisian-mcp demo — Teable
+#
+# Zero-flag compose: `docker compose up` works on a fresh clone with no
+# preparation. See common/docs/HOST-CONTRACT.md.
+
+name: frisian-mcp-demo-teable
+
+x-app: &app
+  image: "ghcr.io/frisian-mcp/demo-teable:${DEMO_TAG:-v0.1.0-rc.1}"
+  restart: unless-stopped
+  environment:
+    # Postgres connection
+    POSTGRES_HOST: db
+    POSTGRES_PORT: "5432"
+    POSTGRES_DB: "${POSTGRES_DB:-teable}"
+    POSTGRES_USER: "${POSTGRES_USER:-teable}"
+    POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-teable}"
+    PRISMA_DATABASE_URL: "postgresql://${POSTGRES_USER:-teable}:${POSTGRES_PASSWORD:-teable}@db:5432/${POSTGRES_DB:-teable}"
+    PUBLIC_DATABASE_PROXY: "${DEMO_BIND_HOST:-127.0.0.1}:${DEMO_DB_PORT:-42345}"
+    
+    # Redis connection
+    REDIS_HOST: redis
+    REDIS_PORT: "6379"
+    REDIS_DB: "0"
+    REDIS_PASSWORD: "${REDIS_PASSWORD:-teable}"
+    BACKEND_CACHE_PROVIDER: redis
+    BACKEND_CACHE_REDIS_URI: "redis://default:${REDIS_PASSWORD:-teable}@redis:6379/0"
+    
+    # App settings
+    PUBLIC_ORIGIN: "http://${DEMO_BIND_HOST:-127.0.0.1}:${DEMO_HTTP_PORT:-3000}"
+    SECRET_KEY: "${SECRET_KEY:-frisian-demo-teable-secret-key-do-not-reuse}"
+    TIMEZONE: UTC
+    
+    # Optional: Image handling - use remote by default for demo
+    IMAGES_ALL_REMOTE: "true"
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  teable:
+    <<: *app
+    ports:
+      # Loopback by default. 0.0.0.0 publishes a stack whose credentials are
+      # printed in the README.
+      - "${DEMO_BIND_HOST:-127.0.0.1}:${DEMO_HTTP_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 2m
+    volumes:
+      - teable_data:/app/.assets:rw
+
+  redis:
+    image: "redis:7.2.4"
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass "${REDIS_PASSWORD:-teable}"
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    expose:
+      - "6379"
+    volumes:
+      - redis_data:/data:rw
+
+  db:
+    image: "ghcr.io/frisian-mcp/demo-teable-db:${DEMO_TAG:-v0.1.0-rc.1}"
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-teable}"
+      POSTGRES_USER: "${POSTGRES_USER:-teable}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-teable}"
+    ports:
+      # Database proxy port for external SQL access (documented in PUBLIC_DATABASE_PROXY)
+      - "${DEMO_BIND_HOST:-127.0.0.1}:${DEMO_DB_PORT:-42345}:5432"
+    # PGDATA is a tmpfs, and that is what makes the demo reproducible: the
+    # estate is restored on EVERY start, including `docker compose restart`.
+    #
+    # Do not replace this with a volume, and do not remove it because "no
+    # volume is declared anyway". The postgres image declares VOLUME in its
+    # own Dockerfile, so Docker creates an ANONYMOUS one — which Compose then
+    # preserves across recreation, including an `up` onto a changed image.
+    # Measured: that path skips initdb and comes up green against a stale
+    # database. A tmpfs cannot outlive the container, so there is no state to
+    # preserve and initdb.d fires every time.
+    tmpfs:
+      - /var/lib/postgresql/data:size=1g
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER:-teable} -d ${POSTGRES_DB:-teable}"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 5m
+
+volumes:
+  teable_data:
+  redis_data:
