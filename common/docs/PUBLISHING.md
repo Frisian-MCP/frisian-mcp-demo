@@ -608,3 +608,39 @@ Published tags are immutable, so rollback is "tell people the older tag":
 - [ ] Verified from clean on both an amd64 and an arm64 machine
 - [ ] Fresh-clone `docker compose up` reaches a working demo
 - [ ] README names the new tag
+
+---
+
+## Nest / npm publish lane (Phase 7 extension)
+
+Python `FRISIAN_MCP_SOURCE` / three-lane table above still governs Django/Flask
+hosts. Nest hosts add a parallel axis. Do not fold npm index flags into a
+single pip-shaped string.
+
+### npm lanes
+
+| lane | Frisian source | DEMO tag shape | who publishes |
+|---|---|---|---|
+| `rehearsal` | `<host>/.frisian/*.tgz` (nestjs-test + core-test) **or** exact `next` versions | `-rc` / `-pre` only | Jeremy only |
+| `npm-next` | registry `@frisian-mcp/nestjs-test@…` + `@frisian-mcp/core-test@…` on `next` | `-rc` / `-pre` only until release cut | Jeremy only |
+| `release` | later immutable non-rc npm | plain semver demo tag | Jeremy only |
+
+**Tip bar for Phase 7 rehearsal:** nestjs-test `0.0.4-rc.3` + core-test
+`0.1.0-rc.14` + `@modelcontextprotocol/sdk@^1.30.0` direct.
+
+### Hard rules carried from Phase 6
+
+- Tip iterate locally = base image + Frisian overlay (file: tarballs / next
+  pins). Do **not** republish GHCR on every tip bump.
+- GHCR publish = frozen `-rc` product pair under one `DEMO_TAG`.
+- **No npm `latest` promote** as part of tip soak.
+- **gauzy** images: published base + Frisian layer only — never bake the
+  ever-gauzy monorepo into this repo's Dockerfiles.
+
+### Nest publish checklist add-ons
+
+- [ ] Lockfile contains nestjs-test, core-test, and `@modelcontextprotocol/sdk@^1.30.0`
+- [ ] Image build asserts SDK `server/index.js` resolves
+- [ ] In-container versions match tip bar before tagging
+- [ ] `DEMO_TAG` is `-rc`/`-pre` for rehearsal / npm-next
+- [ ] Jeremy triggers publish; agents prepare `publish.sh` + workflow only

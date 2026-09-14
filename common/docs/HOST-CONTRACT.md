@@ -383,3 +383,88 @@ vendoring it. That requirement is usually a sign the base image is wrong.
     doors are listed. Step 12 passes without them.
 
 Steps 12 and 13 are the acceptance test. The rest is how you pass it.
+
+---
+
+## Nest / npm hosts (Phase 7 extension)
+
+Python hosts above remain the default shape. Nest hosts (`teable` → `gauzy` →
+`ghostfolio`) inherit the **self-contained directory**, lockstep `DEMO_TAG`
+pair, zero-flag compose, no `env_file:`, loopback bind, and **no host source
+vendoring** rules unchanged. What changes is the Frisian install surface and a
+few checklist rows.
+
+### Frisian packages are npm, not pip
+
+Do **not** pretend `FRISIAN_MCP_SPEC` / `FRISIAN_MCP_LOCAL_WHEEL` map 1:1 onto
+Nest. A Nest host installs **two** packages that must stay lockstep with each
+other and with the tip bar:
+
+| package | tip bar (Phase 6/7) | channel |
+|---|---|---|
+| `@frisian-mcp/nestjs-test` | `0.0.4-rc.3` | `next` (never `latest` for tip) |
+| `@frisian-mcp/core-test` | `0.1.0-rc.14` | `next` |
+
+Lanes (npm analogue of the Python table in `PUBLISHING.md`):
+
+| lane | source | may publish GHCR |
+|---|---|---|
+| `rehearsal` | packed `.tgz` under `<host>/.frisian/` (or `tgz/`) **or** exact `next` pins | **yes — `-rc` / `-pre` tag only** |
+| `npm-next` | registry `next` dist-tags only | validate artifact; publish policy same as rehearsal until a release cut |
+| `release` | later — immutable non-`rc` npm + plain demo tag | **yes** (not Phase 7 tip work) |
+
+Exactly one lane per build. Dockerfile must fail closed if none or both of
+registry-spec vs local-tarball are set (same spirit as the Python wheel gate).
+
+Local tarballs are **build inputs**, gitignored like `*.whl`, with a committed
+`.gitkeep` + README so `COPY .frisian/` cannot fail on a clean clone.
+
+### `@modelcontextprotocol/sdk` peer is REQUIRED
+
+`@frisian-mcp/nestjs-test` declares `@modelcontextprotocol/sdk@^1.30.0` as a
+**peer**. Peers are not installed by default in production Nest images.
+
+**Measured miss (P6-2b):** tip pins present, image crash-looped on
+`Cannot find module '@modelcontextprotocol/sdk/server/index.js'`.
+
+Every Nest host Dockerfile MUST install the peer as a **direct** dependency in
+the same install that brings in nestjs/core (e.g. root `package.json` + lock,
+or an explicit `npm install` / `yarn add -W` in the image). Build-time assert
+that `require.resolve('@modelcontextprotocol/sdk/server/index.js')` succeeds
+and that nestjs/core package versions match the tip bar.
+
+### gauzy: no monorepo bake
+
+`gauzy` MUST **`FROM` a published API base** (upstream GHCR or a Frisian-built
+base) and add a thin Frisian layer (`.frisian` tarballs + SDK peer + config).
+
+**Forbidden:** vendoring the `ever-gauzy` monorepo into this repo, or iterating
+by rebuilding the full gauzy packaging graph inside `frisian-mcp-demo`
+("packaging-as-iterate"). Phase 4/6 already paid that cost; tip iterate =
+base image + overlay. GHCR publish = frozen `-rc` product pair.
+
+### Nest checklist delta (vs Python host checklist above)
+
+Keep steps 1–13 of the Python checklist where they apply. Deltas:
+
+1. **Package manager** — pin one of npm / yarn / pnpm per host; commit the
+   lockfile the Dockerfile uses with `--frozen-lockfile` / equivalent.
+2. **SDK peer** — direct dep + build assert (see above). Not optional.
+3. **Identities** — Nest hosts may mint JWT / API tokens rather than Django
+   tokens. Still: provision a roster, assert it independently of the
+   provisioner, document door credentials in README / GETTING-STARTED.
+4. **Seed** — if the host has no golden SQL yet, say so in README and either
+   (a) ship a minimal db image that still satisfies zero-flag up, or (b) get
+   an explicit contract exception before merging. Do not silently skip `db/`.
+5. **Acceptance** — `common/ci/acceptance-<host>.sh` must at least:
+   - wait for healthy HTTP
+   - MCP `initialize` → `serverInfo.version` matches nestjs tip
+   - resolve in-container versions for nestjs-test, core-test, and SDK
+   - `tools/list` (and a safe `tools/call` when P7 prove tasks require it)
+6. **Client configs** — still required (`.mcp.json`, `.cursor/mcp.json`,
+   `.codex/config.toml`). Nest HTTP path / port go in those files.
+7. **Publish** — Jeremy-only GHCR; rehearsal/`-rc` only for tip; no `latest`;
+   no npm `latest` promote as part of tip soak.
+
+Order of host work: **teable → gauzy → ghostfolio**. Do not open the next
+directory until the previous host's contract + local prove path is accepted.
