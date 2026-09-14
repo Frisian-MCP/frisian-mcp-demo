@@ -40,6 +40,10 @@ nautobot/wheels/*.whl
 paperless/wheels/*.whl
 netbox/wheels/*.whl
 
+# Nest hosts (npm) use packed tarballs instead of wheels. Same principle:
+# local rehearsal tarballs are build inputs, gitignored per host.
+teable/.frisian/*.tgz
+
 # The Paperless demo estate has TWO halves. `**/demo.sql.gz` above covers the
 # database; this covers the media tree the database points at. Both are build
 # artifacts produced by paperless/seed/seed.sh, and the media tarball is a
